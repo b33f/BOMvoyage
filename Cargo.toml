@@ -1,13 +1,13 @@
 [package]
-name = "relate-sbom"
+name = "bomvoyage"
 version = "0.1.0"
 edition = "2021"
-description = "Temporal SBOM generator and explorer backed by the Relate embedded graph database"
+description = "BOMvoyage — temporal SBOM generator and explorer, powered by RelateDB"
 license = "Apache-2.0"
-repository = "https://github.com/relatedb/relate-sbom-tool"
+repository = "https://github.com/relatedb/BOMvoyage"
 
 [[bin]]
-name = "relate-sbom"
+name = "bomvoyage"
 path = "src/main.rs"
 
 [dependencies]

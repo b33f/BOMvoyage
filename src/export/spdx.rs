@@ -71,7 +71,7 @@ pub fn render(
         "documentNamespace": format!("https://relate.dev/sbom/{repo_name}/as-of/{as_of}"),
         "creationInfo": {
             "created": as_of,
-            "creators": ["Tool: relate-sbom-tool"],
+            "creators": ["Tool: BOMvoyage"],
             "licenseListVersion": "3.23",
         },
         "packages": packages,

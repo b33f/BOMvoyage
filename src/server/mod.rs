@@ -22,7 +22,7 @@ pub const CYTOSCAPE_JS: &[u8] = include_bytes!("../ui/vendor/cytoscape.min.js");
 /// its own engine connection from the shared `Database`.
 pub fn serve(db: Arc<Database>, repo_name: &str, port: u16) -> std::io::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
-    eprintln!("SBOM explorer: http://127.0.0.1:{port}");
+    eprintln!("BOMvoyage explorer: http://127.0.0.1:{port}");
     let api = Arc::new(Api {
         db,
         repo_name: repo_name.to_string(),

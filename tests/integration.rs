@@ -107,8 +107,8 @@ fn temporal_sbom_end_to_end() {
         &cargo_toml(&[("tokio", "1.0.0")]),
     );
 
-    let db = tmp.path().join("sbom.rl");
-    let out = relate_sbom_scan(&repo, &db);
+    let db = tmp.path().join("bomvoyage.rl");
+    let out = bomvoyage_scan(&repo, &db);
     assert_eq!(out.repo_name, "demo");
 
     // As of March: serde 1.0.200 + tokio live; the serde bump closed 1.0.100.
@@ -116,7 +116,7 @@ fn temporal_sbom_end_to_end() {
         let mut params = std::collections::BTreeMap::new();
         params.insert("as_of".to_string(), Value::String(as_of.to_string().into()));
         let result = conn
-            .query_with_params(relate_sbom::graph::queries::LIVE_PACKAGES, params)
+            .query_with_params(bomvoyage::graph::queries::LIVE_PACKAGES, params)
             .expect("live query");
         let i = result
             .header
@@ -133,7 +133,7 @@ fn temporal_sbom_end_to_end() {
 
     // (A `.rl` bundle holds one open handle at a time — scope each reader.)
     {
-        let graph = relate_sbom::graph::SbomGraph::open_read_only(&db).expect("db opens");
+        let graph = bomvoyage::graph::SbomGraph::open_read_only(&db).expect("db opens");
         let mut conn = graph.db.connect().expect("connect");
         let march = live_at(&mut conn, "2024-03-15T00:00:00Z");
         assert!(
@@ -175,9 +175,9 @@ fn temporal_sbom_end_to_end() {
     }
 
     // Idempotency: scan again, counts unchanged.
-    relate_sbom_scan(&repo, &db);
+    bomvoyage_scan(&repo, &db);
     {
-        let graph = relate_sbom::graph::SbomGraph::open_read_only(&db).expect("db reopens");
+        let graph = bomvoyage::graph::SbomGraph::open_read_only(&db).expect("db reopens");
         let mut conn = graph.db.connect().expect("connect");
         let r = conn
             .query("MATCH ()-[r:DECLARES]->() RETURN count(r) AS n")
@@ -192,10 +192,10 @@ fn temporal_sbom_end_to_end() {
 }
 
 /// Run the scanner as a library call (the binary's `scan` path).
-fn relate_sbom_scan(repo: &Path, db: &Path) -> relate_sbom::scan::ScanOutput {
+fn bomvoyage_scan(repo: &Path, db: &Path) -> bomvoyage::scan::ScanOutput {
     let out =
-        relate_sbom::scan::run(repo, relate_sbom::scan::ScanCaps::default()).expect("scan runs");
-    let graph = relate_sbom::graph::SbomGraph::open_writable(db).expect("db opens");
+        bomvoyage::scan::run(repo, bomvoyage::scan::ScanCaps::default()).expect("scan runs");
+    let graph = bomvoyage::graph::SbomGraph::open_writable(db).expect("db opens");
     graph.write_scan(&out).expect("write runs");
     out
 }
