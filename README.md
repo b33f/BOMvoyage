@@ -166,6 +166,10 @@ $ cargo build --release
 The finished binary lands at **`target/release/bomvoyage`** (relative to the clone).
 A debug build (`cargo build`, faster to compile) lands at `target/debug/bomvoyage`.
 
+> **Note:** the final release link step parallelizes across your cores and can sit
+> near-silent on its last unit for ~15–30 seconds — that's normal, not a hang.
+
+
 ### What to do next
 
 Run it with the full path, from inside any git repository you want to explore:
