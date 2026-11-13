@@ -160,8 +160,37 @@ PS> rustup default stable
 Then, from a clone of this repository:
 
 ```console
-$ cargo build --release      # binary at target/release/bomvoyage
+$ cargo build --release
 ```
+
+The finished binary lands at **`target/release/bomvoyage`** (relative to the clone).
+A debug build (`cargo build`, faster to compile) lands at `target/debug/bomvoyage`.
+
+### What to do next
+
+Run it with the full path, from inside any git repository you want to explore:
+
+```console
+$ cd /path/to/some/git/repo
+$ /path/to/BOMvoyage/target/release/bomvoyage
+```
+
+It scans the repo, writes `bomvoyage.rl` into the current directory, and opens
+`http://localhost:8334` in your browser.
+
+If you'd rather just type `bomvoyage` from anywhere, install it onto your PATH
+(from the clone):
+
+```console
+$ cargo install --path .          # installs to ~/.cargo/bin/bomvoyage
+$ cargo uninstall bomvoyage       # to remove it again
+```
+
+(`~/.cargo/bin` is on your PATH if you installed Rust via rustup.)
+
+Every scan you run leaves a `bomvoyage.rl` file next to where you ran it — that
+file *is* the database. Re-running in the same repo with an unchanged HEAD is a
+no-op; delete the file (or use `--force`) for a from-scratch scan.
 
 The only runtime dependency that matters is [`relate`](https://crates.io/crates/relate)
 — the RelateDB embedded openCypher graph engine
