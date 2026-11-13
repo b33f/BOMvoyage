@@ -53,7 +53,7 @@ pub fn render(
     let doc = serde_json::json!({
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
-        "serialNumber": format!("urn:uuid:relate-sbom-{as_of}"),
+        "serialNumber": format!("urn:uuid:bomvoyage-{as_of}"),
         "version": 1,
         "metadata": {
             "timestamp": as_of,
@@ -62,12 +62,12 @@ pub fn render(
                 "name": repo_name,
             },
             "tools": [{
-                "vendor": "relate-sbom-tool",
-                "name": "relate-sbom-tool",
+                "vendor": "BOMvoyage",
+                "name": "BOMvoyage",
                 "version": env!("CARGO_PKG_VERSION"),
             }],
             "properties": [{
-                "name": "relate-sbom:as-of",
+                "name": "bomvoyage:as-of",
                 "value": as_of,
             }],
         },

@@ -1,5 +1,5 @@
-//! relate-sbom library: scan a git repo's dependency manifests into a
-//! temporal SBOM graph in the Relate embedded database, serve an explorer
+//! BOMvoyage library: scan a git repo's dependency manifests into a
+//! temporal SBOM graph in RelateDB (https://relatedb.ai/), serve an explorer
 //! UI, export SPDX/CycloneDX as of any point in time.
 
 pub mod cli;

@@ -1,4 +1,4 @@
-/* SBOM Explorer: interactive graph + time slider + inspector + raw Cypher. */
+/* BOMvoyage: interactive graph + time slider + inspector + raw Cypher. */
 "use strict";
 
 const ECOSYSTEM_COLORS = {
@@ -157,7 +157,7 @@ async function init() {
   const badges = (meta.ecosystems || [])
     .map((e) => `<span class="badge">${e.ecosystem}: ${e.names} deps</span>`)
     .join("");
-  document.getElementById("title").textContent = `${meta.name} — SBOM`;
+  document.getElementById("title").textContent = `${meta.name} — BOMvoyage`;
   document.getElementById("meta").innerHTML =
     `${meta.total_packages} package versions · last scanned ${fmtDate(meta.last_scanned_at)} ` +
     `· resolution: <strong>${meta.scan_quality}</strong> ${badges}`;

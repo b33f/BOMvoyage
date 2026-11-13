@@ -16,14 +16,15 @@ pub enum Format {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "relate-sbom",
+    name = "bomvoyage",
     version,
-    about = "Temporal SBOM generator and explorer, backed by the Relate embedded graph database",
+    about = "BOMvoyage — temporal SBOM generator and explorer, powered by RelateDB",
     long_about = "Scans a git repository's dependency manifests (Python, Java, Rust, Go), \
 builds a graph of every dependency, transitive dependency, usage site and the full \
 git history of who added what and when versions changed — then serves an interactive \
 web UI with time travel: view, query and export the SBOM as of any commit or date.\n\n\
-Run with no subcommand inside a repo to scan it and open the explorer."
+Run with no subcommand inside a repo to scan it and open the explorer.\n\n\
+Powered by RelateDB — https://relatedb.ai/"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -42,7 +43,7 @@ pub enum Command {
         #[arg(value_name = "DIR", default_value = ".")]
         path: std::path::PathBuf,
         /// Graph database file (Relate .rl bundle)
-        #[arg(long, short, value_name = "FILE", default_value = "sbom.rl")]
+        #[arg(long, short, value_name = "FILE", default_value = "bomvoyage.rl")]
         db: std::path::PathBuf,
         /// Re-scan even if the repository HEAD is unchanged
         #[arg(long)]
@@ -51,13 +52,13 @@ pub enum Command {
         #[arg(long, value_name = "N", default_value_t = 5000)]
         max_commits: u64,
     },
-    /// Serve the interactive SBOM explorer (auto-scans if the database is missing)
+    /// Serve the interactive BOMvoyage explorer (auto-scans if the database is missing)
     Serve {
         /// Repository path (used when a scan is needed)
         #[arg(long, value_name = "DIR", default_value = ".")]
         path: std::path::PathBuf,
         /// Graph database file
-        #[arg(long, short, value_name = "FILE", default_value = "sbom.rl")]
+        #[arg(long, short, value_name = "FILE", default_value = "bomvoyage.rl")]
         db: std::path::PathBuf,
         /// Port to listen on
         #[arg(long, value_name = "PORT", default_value_t = 8420)]
@@ -72,7 +73,7 @@ pub enum Command {
     /// Export the SBOM (optionally as of a past commit or date)
     Export {
         /// Graph database file
-        #[arg(long, short, value_name = "FILE", default_value = "sbom.rl")]
+        #[arg(long, short, value_name = "FILE", default_value = "bomvoyage.rl")]
         db: std::path::PathBuf,
         /// Output format
         #[arg(long, short, value_enum, default_value = "spdx")]
@@ -87,7 +88,7 @@ pub enum Command {
     /// Run a read-only Cypher query against the graph
     Query {
         /// Graph database file
-        #[arg(long, short, value_name = "FILE", default_value = "sbom.rl")]
+        #[arg(long, short, value_name = "FILE", default_value = "bomvoyage.rl")]
         db: std::path::PathBuf,
         /// The Cypher statement
         #[arg(value_name = "CYPHER")]

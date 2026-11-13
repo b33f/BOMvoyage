@@ -1,4 +1,6 @@
-//! relate-sbom binary: CLI dispatch over the library.
+//! BOMvoyage binary: CLI dispatch over the library.
+//!
+//! BOMvoyage is powered by RelateDB — https://relatedb.ai/
 
 use std::io::Write as _;
 use std::path::Path;
@@ -7,10 +9,10 @@ use std::sync::Arc;
 use clap::Parser;
 use relate::{Database, OpenMode, OpenOptions};
 
-use relate_sbom::cli::{Cli, Command};
-use relate_sbom::error::{ToolError, ToolResult};
-use relate_sbom::graph::SbomGraph;
-use relate_sbom::{export, graph, scan, server};
+use bomvoyage::cli::{Cli, Command};
+use bomvoyage::error::{ToolError, ToolResult};
+use bomvoyage::graph::SbomGraph;
+use bomvoyage::{export, graph, scan, server};
 
 fn main() {
     let cli = Cli::parse();
@@ -26,7 +28,7 @@ fn main() {
 
 fn run(cli: &Cli) -> ToolResult<()> {
     match &cli.command {
-        None => all_in_one(&cli.path, Path::new("sbom.rl"), 8420, 5000),
+        None => all_in_one(&cli.path, Path::new("bomvoyage.rl"), 8420, 5000),
         Some(Command::Scan {
             path,
             db,
@@ -56,7 +58,7 @@ fn run(cli: &Cli) -> ToolResult<()> {
     }
 }
 
-/// The demo path: `relate-sbom` in a repo = scan + serve.
+/// The demo path: `bomvoyage` in a repo = scan + serve.
 fn all_in_one(path: &Path, db: &Path, port: u16, max_commits: u64) -> ToolResult<()> {
     cmd_scan(path, db, false, max_commits)?;
     cmd_serve(db, port, false)
@@ -132,7 +134,7 @@ fn project_name(graph: &SbomGraph) -> ToolResult<String> {
 
 fn cmd_export(
     db: &Path,
-    format: relate_sbom::cli::Format,
+    format: bomvoyage::cli::Format,
     as_of: Option<&str>,
     output: Option<&Path>,
 ) -> ToolResult<()> {
