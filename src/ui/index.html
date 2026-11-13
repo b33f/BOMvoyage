@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SBOM Explorer</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div id="title">SBOM Explorer</div>
+  <div id="meta">loading…</div>
+</header>
+<section id="timeline">
+  <label for="slider">time travel</label>
+  <input type="range" id="slider" min="0" max="0" value="0">
+  <input type="date" id="datepick">
+  <span id="asof-label">HEAD</span>
+  <button id="reset-btn" type="button">reset to HEAD</button>
+</section>
+<main>
+  <div id="cy"></div>
+  <aside id="inspector">
+    <h2>package</h2>
+    <div id="pkg-details"><em>click a node</em></div>
+  </aside>
+</main>
+<section id="cypher-box">
+  <details>
+    <summary>raw Cypher</summary>
+    <textarea id="cypher-input" rows="3" spellcheck="false"></textarea>
+    <button id="run-cypher" type="button">run (read-only)</button>
+    <pre id="cypher-output"></pre>
+  </details>
+</section>
+<script src="/cytoscape.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

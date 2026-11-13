@@ -1,0 +1,28 @@
+[package]
+name = "relate-sbom"
+version = "0.1.0"
+edition = "2021"
+description = "Temporal SBOM generator and explorer backed by the Relate embedded graph database"
+license = "Apache-2.0"
+repository = "https://github.com/relatedb/relate-sbom-tool"
+
+[[bin]]
+name = "relate-sbom"
+path = "src/main.rs"
+
+[dependencies]
+relate = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+httparse = "1"
+toml = "0.8"
+quick-xml = "0.36"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+strip = true
+lto = true

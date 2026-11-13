@@ -1,0 +1,88 @@
+:root {
+  --bg: #0e1116;
+  --panel: #161b24;
+  --text: #e6e8eb;
+  --muted: #8b949e;
+  --accent: #4c8dff;
+  --border: #2a3038;
+  --python: #4b8bbe;
+  --java: #e76f00;
+  --rust: #dea584;
+  --go: #00add8;
+  --generic: #8b949e;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 14px/1.5 -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+#title { font-weight: 700; font-size: 16px; }
+#meta { color: var(--muted); font-size: 12px; }
+#timeline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+#timeline label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+#slider { flex: 1; accent-color: var(--accent); }
+#asof-label { font-family: ui-monospace, monospace; font-size: 12px; color: var(--accent); min-width: 26ch; }
+button, input[type="date"], textarea {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: inherit;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+main { flex: 1; display: flex; min-height: 0; }
+#cy { flex: 1; min-width: 0; }
+#inspector {
+  width: 320px;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  padding: 12px 16px;
+  overflow-y: auto;
+}
+#inspector h2 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+#pkg-details dt { color: var(--muted); font-size: 11px; margin-top: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+#pkg-details dd { margin: 2px 0 0; font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; }
+#pkg-details ul { margin: 4px 0; padding-left: 18px; }
+#pkg-details code { font-size: 11px; }
+#cypher-box { border-top: 1px solid var(--border); background: var(--panel); padding: 6px 16px 12px; }
+#cypher-box summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+#cypher-input { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; margin-top: 6px; }
+#cypher-output {
+  max-height: 180px;
+  overflow: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  margin: 8px 0 0;
+}
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 8px;
+}
