@@ -85,7 +85,8 @@ MERGE (m)-[r:DECLARES {key: row.key}]->(p)
 SET r.since_sha = row.since_sha, r.since_date = row.since_date,
     r.removed_sha = row.removed_sha, r.removed_date = row.removed_date,
     r.version_requirement = row.requirement, r.scope = row.scope,
-    r.added_by_email = row.email, r.added_by_name = row.name
+    r.added_by_email = row.email, r.added_by_name = row.name,
+    r.provisional = row.provisional
 "#;
 
 /// DEPENDS_ON intervals, keyed `(from_purl, to_purl, since_sha)`.
@@ -114,7 +115,8 @@ pub const MERGE_PROJECT: &str = r#"
 UNWIND $rows AS row
 MERGE (pr:Project {name: row.name})
 SET pr.head_sha = row.head_sha, pr.last_scanned_at = row.scanned_at,
-    pr.tool_version = row.tool_version, pr.scan_quality = row.scan_quality
+    pr.tool_version = row.tool_version, pr.scan_quality = row.scan_quality,
+    pr.history_head_sha = row.history_head
 "#;
 
 pub const MERGE_HAS_MANIFEST: &str = r#"
@@ -136,7 +138,7 @@ UNWIND $rows AS row
 MATCH (x:Person {email: row.email})
 MATCH (p:Package {purl: row.purl})
 MERGE (x)-[r:ADDED {at_sha: row.sha}]->(p)
-SET r.at_date = row.date
+SET r.at_date = row.date, r.provisional = row.provisional
 "#;
 
 pub const MERGE_REMOVED: &str = r#"
@@ -145,6 +147,16 @@ MATCH (x:Person {email: row.email})
 MATCH (p:Package {purl: row.purl})
 MERGE (x)-[r:REMOVED {at_sha: row.sha}]->(p)
 SET r.at_date = row.date
+"#;
+
+/// Provisional intervals (a current-only scan) are deleted before the full
+/// history replaces them.
+pub const DELETE_PROVISIONAL: &str = r#"
+MATCH ()-[r:DECLARES]->() WHERE r.provisional = true DELETE r
+"#;
+
+pub const DELETE_PROVISIONAL_ADDED: &str = r#"
+MATCH ()-[r:ADDED]->() WHERE r.provisional = true DELETE r
 "#;
 
 pub const MERGE_TOUCHED: &str = r#"

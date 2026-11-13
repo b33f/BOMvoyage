@@ -88,3 +88,16 @@ main { flex: 1; display: flex; min-height: 0; }
 }
 #views { display: inline-flex; gap: 4px; }
 #views button.active { border-color: var(--accent); color: var(--accent); }
+
+#travel-banner {
+  display: block;
+  padding: 6px 16px;
+  background: #3a2c08;
+  border-bottom: 1px solid #8a6d1a;
+  color: #ffd966;
+  font-weight: 600;
+}
+#travel-banner[hidden] { display: none; }
+#cypher-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+#cypher-presets button { font-size: 11px; color: var(--muted); }
+#cypher-presets button:hover { color: var(--text); }

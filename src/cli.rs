@@ -33,6 +33,10 @@ pub struct Cli {
     /// Repository path to scan (default command only)
     #[arg(long, value_name = "DIR", default_value = ".")]
     pub path: std::path::PathBuf,
+
+    /// Graph database file (default command only)
+    #[arg(long, short, value_name = "FILE", default_value = "bomvoyage.rl")]
+    pub db: std::path::PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
