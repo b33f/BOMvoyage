@@ -59,6 +59,15 @@ function setAsOfLabel(asOf) {
   }
 }
 
+/// Fit all elements, but never zoom a small graph into absurdity.
+function fitReasonably() {
+  cy.fit(undefined, 40);
+  if (cy.zoom() > 1.2) {
+    cy.zoom(1.2);
+    cy.center();
+  }
+}
+
 function visibleElements(elements) {
   const nodes = elements.nodes.map((n) => ({
     data: Object.assign({ type: "package" }, n.data),
@@ -118,8 +127,7 @@ function buildViewElements(elements) {
   return { nodes: [...groups.values()].concat(nodes), edges };
 }
 
-function buildGraph(payload) {
-  const elements = buildViewElements(visibleElements(payload.elements));
+function buildGraph(elements) {
   if (!cy) {
     cy = cytoscape({
       container: document.getElementById("cy"),
@@ -190,6 +198,7 @@ function buildGraph(payload) {
       layout: { name: "cose", animate: false, randomize: false },
       wheelSensitivity: 0.2,
     });
+    fitReasonably();
     cy.on("tap", "node[type]", (evt) => {
       if (evt.target.data("type") === "package") showPackage(evt.target.data("id"));
     });
@@ -197,6 +206,7 @@ function buildGraph(payload) {
     cy.elements().remove();
     cy.add(elements);
     cy.layout({ name: "cose", animate: false }).run();
+    fitReasonably();
   }
 }
 
@@ -223,10 +233,10 @@ async function refresh() {
 /// query result.
 function renderCurrentView() {
   if (queryElements) {
-    buildGraph({ elements: queryElements });
+    buildGraph(queryElements);
     return;
   }
-  buildGraph({ elements: buildViewElements(visibleElements(lastElements)) });
+  buildGraph(buildViewElements(visibleElements(lastElements)));
 }
 
 function clearQueryResult() {
@@ -439,6 +449,7 @@ async function runCypher() {
       clearBtn.hidden = false;
       clearBtn.textContent =
         `clear query result (${elements.nodes.length} nodes, ${elements.edges.length} edges)`;
+      renderCurrentView();
     }
     out.textContent = JSON.stringify(res.rows ?? res, null, 2).slice(0, 20000);
   } catch (e) {
