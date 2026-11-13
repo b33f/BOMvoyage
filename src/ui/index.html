@@ -14,7 +14,10 @@
 <section id="timeline">
   <label for="slider">time travel</label>
   <input type="range" id="slider" min="0" max="0" value="0">
-  <input type="date" id="datepick">
+  <span id="datewrap">
+    <button id="datebtn" type="button">📅 pick date</button>
+    <div id="calendar" hidden></div>
+  </span>
   <span id="asof-label">HEAD</span>
   <span id="views">
     <button data-view="devs" class="active" type="button">by developer</button>

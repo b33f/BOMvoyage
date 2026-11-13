@@ -16,6 +16,9 @@ let showTransitive = null;   // null = auto-decide on the first load
 let lastElements = null;     // full as-of element set from /api/graph
 let view = "devs";           // 'devs' (default) | 'areas' | 'deps'
 let queryElements = null;    // raw-Cypher result shown in the main canvas
+let days = [];               // distinct commit dates (yyyy-mm-dd), ascending
+let selectedDate = null;     // explicit calendar pick (yyyy-mm-dd)
+let calMonth = null;         // month the calendar popover is showing
 const DIRECT_ONLY_THRESHOLD = 20;
 
 async function fetchJson(url, opts) {
@@ -26,12 +29,12 @@ async function fetchJson(url, opts) {
 }
 
 function asOfValue() {
-  // The slider picks a commit; the date picker overrides.
-  const date = document.getElementById("datepick").value;
-  if (date) return date;
+  // Calendar pick wins; else the slider's DAY (end of day, so the whole
+  // day's commits are included). Past the last day = HEAD.
+  if (selectedDate) return `${selectedDate}T23:59:59Z`;
   const idx = Number(document.getElementById("slider").value);
-  if (commits.length === 0 || idx >= commits.length - 1) return null; // HEAD
-  return commits[idx].sha;
+  if (commits.length === 0 || idx >= days.length) return null; // HEAD
+  return `${days[idx]}T23:59:59Z`;
 }
 
 function asOfLabel(asOf) {
@@ -40,23 +43,28 @@ function asOfLabel(asOf) {
 
 function setAsOfLabel(asOf) {
   const label = asOfLabel(asOf);
-  const commit = commits.find((c) => c.sha === asOf);
-  document.getElementById("asof-label").textContent = commit
-    ? `${commit.sha.slice(0, 10)} · ${commit.date.slice(0, 10)} · ${commit.summary}`
-    : label;
+  const banner = document.getElementById("travel-banner");
+  if (!asOf) {
+    document.getElementById("asof-label").textContent = label;
+    banner.hidden = true;
+    banner.textContent = "";
+    markCalendarSelection(null);
+    return;
+  }
+  const day = asOf.slice(0, 10);
+  const dayCommits = commits.filter((c) => c.date.startsWith(day));
+  const last = dayCommits[dayCommits.length - 1];
+  const detail = last
+    ? `${dayCommits.length} commit${dayCommits.length === 1 ? "" : "s"} that day · last: ${last.sha.slice(0, 10)} ${last.summary}`
+    : "no commits that day — the SBOM as it stood before the next one";
+  document.getElementById("asof-label").textContent = detail;
 
   // The banner is the unmissable time-travel signal: gold when viewing the
   // past, absent at HEAD.
-  const banner = document.getElementById("travel-banner");
-  if (!commit) {
-    banner.hidden = true;
-    banner.textContent = "";
-  } else {
-    banner.hidden = false;
-    banner.textContent =
-      `⏱ TIME TRAVEL — viewing dependencies as of ${commit.date.slice(0, 10)} ` +
-      `(commit ${commit.sha.slice(0, 10)}: ${commit.summary}) — press "reset to HEAD" to return`;
-  }
+  banner.hidden = false;
+  banner.textContent =
+    `⏱ TIME TRAVEL — viewing dependencies as of ${day} (${detail}) — press "reset to HEAD" to return`;
+  markCalendarSelection(day);
 }
 
 /// Fit all elements, but never zoom a small graph into absurdity.
@@ -343,17 +351,18 @@ async function init() {
     `· resolution: <strong>${meta.scan_quality}</strong> ${badges}`;
 
   const commitPayload = await fetchJson("/api/commits");
-  commits = commitPayload.rows || []; // ascending by date: slider left = oldest, right = HEAD
+  commits = commitPayload.rows || []; // ascending by date
+  days = [...new Set(commits.map((c) => c.date.slice(0, 10)))]; // one tick per DAY
   const slider = document.getElementById("slider");
-  slider.max = Math.max(commits.length - 1, 0);
+  slider.max = days.length; // past the last day = HEAD
   slider.value = slider.max;
   slider.addEventListener("input", () => {
-    document.getElementById("datepick").value = "";
+    selectedDate = null;
     refresh();
   });
-  document.getElementById("datepick").addEventListener("change", refresh);
+  wireCalendar();
   document.getElementById("reset-btn").addEventListener("click", () => {
-    document.getElementById("datepick").value = "";
+    selectedDate = null;
     slider.value = slider.max;
     refresh();
   });
@@ -391,8 +400,9 @@ function pollHistoryStatus(current) {
         badge.remove();
         const commitPayload = await fetchJson("/api/commits");
         commits = commitPayload.rows || [];
+        days = [...new Set(commits.map((c) => c.date.slice(0, 10)))];
         const slider = document.getElementById("slider");
-        slider.max = Math.max(commits.length - 1, 0);
+        slider.max = days.length;
         slider.value = slider.max;
         refresh();
       }
@@ -400,6 +410,89 @@ function pollHistoryStatus(current) {
       // server momentarily busy — keep polling
     }
   }, 2000);
+}
+
+// ---- calendar picker: one month at a time; days with git checkpoints
+// carry a dot, the viewed day is highlighted, any day is selectable.
+const MONTHS = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+const DOW = ["S", "M", "T", "W", "T", "F", "S"];
+
+function wireCalendar() {
+  const btn = document.getElementById("datebtn");
+  const cal = document.getElementById("calendar");
+  const latest = commits.length ? commits[commits.length - 1].date.slice(0, 10) : null;
+  calMonth = latest ? new Date(latest + "T12:00:00Z") : new Date();
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    cal.hidden = !cal.hidden;
+    if (!cal.hidden) renderCalendar();
+  });
+  cal.addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", () => { cal.hidden = true; });
+}
+
+function renderCalendar() {
+  const cal = document.getElementById("calendar");
+  if (cal.hidden) return;
+  const y = calMonth.getUTCFullYear();
+  const m = calMonth.getUTCMonth();
+  const asOfDate = (asOfValue() || "").slice(0, 10);
+  const checkpoints = new Set(days);
+
+  let html = `<div id="cal-head">
+    <button type="button" id="cal-prev">‹</button>
+    <span>${MONTHS[m]} ${y}</span>
+    <button type="button" id="cal-next">›</button>
+  </div><div id="cal-grid">`;
+  for (const d of DOW) html += `<div class="cal-dow">${d}</div>`;
+  const first = new Date(Date.UTC(y, m, 1)).getUTCDay();
+  const nDays = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  for (let i = 0; i < first; i++) html += `<div class="cal-day blank"></div>`;
+  for (let d = 1; d <= nDays; d++) {
+    const dateStr = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const isCheckpoint = checkpoints.has(dateStr);
+    const isSelected = asOfDate === dateStr;
+    const classes = ["cal-day", isCheckpoint ? "checkpoint" : "", isSelected ? "selected" : ""]
+      .filter(Boolean).join(" ");
+    html += `<div class="${classes}" data-date="${dateStr}" title="${dayCommitCount(dateStr)} commits">${d}</div>`;
+  }
+  html += `</div><div id="cal-legend"><span class="dot"></span> day with git checkpoints — click a day to time travel</div>`;
+  cal.innerHTML = html;
+  document.getElementById("cal-prev").addEventListener("click", () => {
+    calMonth = new Date(Date.UTC(y, m - 1, 1));
+    renderCalendar();
+  });
+  document.getElementById("cal-next").addEventListener("click", () => {
+    calMonth = new Date(Date.UTC(y, m + 1, 1));
+    renderCalendar();
+  });
+  for (const cell of cal.querySelectorAll(".cal-day[data-date]")) {
+    cell.addEventListener("click", () => pickDay(cell.dataset.date));
+  }
+}
+
+function dayCommitCount(dateStr) {
+  return commits.filter((c) => c.date.startsWith(dateStr)).length;
+}
+
+function pickDay(dateStr) {
+  selectedDate = dateStr;
+  const idx = days.indexOf(dateStr);
+  const slider = document.getElementById("slider");
+  if (idx >= 0) {
+    slider.value = idx;
+  } else if (days.length && dateStr > days[days.length - 1]) {
+    slider.value = slider.max; // after the last checkpoint
+  } else {
+    slider.value = 0; // before the first checkpoint
+  }
+  refresh();
+}
+
+function markCalendarSelection(day) {
+  if (document.getElementById("calendar").hidden) return;
+  renderCalendar();
 }
 
 const CYPHER_PRESETS = [
