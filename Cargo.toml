@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "BOMvoyage — temporal SBOM generator and explorer, powered by RelateDB"
 license = "Apache-2.0"
-repository = "https://github.com/relatedb/BOMvoyage"
+repository = "https://github.com/b33f/BOMvoyage"
 
 [[bin]]
 name = "bomvoyage"

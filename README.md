@@ -30,9 +30,10 @@ $ bomvoyage
 scanning /some-git-repo …
 412 packages across 87 commits, 634 dependency events, 1502 usage sites
 wrote bomvoyage.rl
-BOMvoyage explorer: http://127.0.0.1:8420
+BOMvoyage explorer: http://localhost:8334   # opened in your browser automatically
 ```
 
+Running with no options scans and opens the browser at `http://localhost:8334` on its own.
 Open the URL: an interactive dependency graph with a **time-travel slider** — drag it
 back to any commit and watch the SBOM shrink to what the repo depended on that day.
 Click any package to see **who added it, when, its full version timeline, and every
@@ -69,7 +70,7 @@ comparison is chronological.
 ```text
 bomvoyage                                  # scan + serve (the demo path)
 bomvoyage scan   [PATH] [--db bomvoyage.rl] [--force] [--max-commits N]
-bomvoyage serve  [--db bomvoyage.rl] [--port 8420] [--open]
+bomvoyage serve  [--db bomvoyage.rl] [--port 8334] [--open]
 bomvoyage export [--db bomvoyage.rl] [--format spdx|cyclonedx|json|csv] [--as-of DATE|SHA] [-o FILE]
 bomvoyage query  [--db bomvoyage.rl] <CYPHER>
 ```

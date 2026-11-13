@@ -28,7 +28,7 @@ fn main() {
 
 fn run(cli: &Cli) -> ToolResult<()> {
     match &cli.command {
-        None => all_in_one(&cli.path, Path::new("bomvoyage.rl"), 8420, 5000),
+        None => all_in_one(&cli.path, Path::new("bomvoyage.rl"), 8334, 5000),
         Some(Command::Scan {
             path,
             db,
@@ -58,10 +58,10 @@ fn run(cli: &Cli) -> ToolResult<()> {
     }
 }
 
-/// The demo path: `bomvoyage` in a repo = scan + serve.
+/// The demo path: `bomvoyage` in a repo = scan + serve + open the browser.
 fn all_in_one(path: &Path, db: &Path, port: u16, max_commits: u64) -> ToolResult<()> {
     cmd_scan(path, db, false, max_commits)?;
-    cmd_serve(db, port, false)
+    cmd_serve(db, port, true)
 }
 
 fn cmd_scan(path: &Path, db: &Path, force: bool, max_commits: u64) -> ToolResult<()> {
