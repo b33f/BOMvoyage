@@ -299,8 +299,126 @@ impl Api {
                 .map(|c| serde_json::Value::String(c.clone()))
                 .collect(),
         );
+        out["elements"] = graph_elements_of(&result);
         Ok(out)
     }
+}
+
+/// Collect the graph values of a raw-query result into cytoscape elements.
+fn graph_elements_of(result: &relate::QueryResult) -> serde_json::Value {
+    use relate::{Node, Path, Relationship, Value};
+
+    let mut nodes: Vec<serde_json::Value> = Vec::new();
+    let mut edges: Vec<serde_json::Value> = Vec::new();
+    let mut seen_nodes = std::collections::BTreeSet::new();
+    let mut seen_edges = std::collections::BTreeSet::new();
+
+    fn node_id(id: i64) -> String {
+        format!("n{id}")
+    }
+
+    fn node_json(n: &Node) -> serde_json::Value {
+        // The friendliest identity property wins; else the first label.
+        let label = ["name", "purl", "email", "path", "summary", "title"]
+            .iter()
+            .find_map(|k| n.properties.get(k))
+            .and_then(|v| v.as_string().map(str::to_string))
+            .unwrap_or_else(|| {
+                n.labels
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| format!("n{}", n.id))
+            });
+        serde_json::json!({
+            "data": {
+                "id": node_id(n.id),
+                "label": label,
+                "type": "query",
+                "ecosystem": n.labels.first().map(|l| l.to_ascii_lowercase()),
+            }
+        })
+    }
+
+    fn edge_json(r: &Relationship) -> serde_json::Value {
+        serde_json::json!({
+            "data": {
+                "source": node_id(r.start),
+                "target": node_id(r.end),
+                "label": r.rel_type,
+                "source_kind": "query",
+            }
+        })
+    }
+
+    fn push_node(
+        n: &Node,
+        nodes: &mut Vec<serde_json::Value>,
+        seen: &mut std::collections::BTreeSet<String>,
+    ) {
+        if seen.insert(node_id(n.id)) {
+            nodes.push(node_json(n));
+        }
+    }
+
+    fn push_edge(
+        r: &Relationship,
+        edges: &mut Vec<serde_json::Value>,
+        seen: &mut std::collections::BTreeSet<(i64, i64, String)>,
+    ) {
+        if seen.insert((r.start, r.end, r.rel_type.clone())) {
+            edges.push(edge_json(r));
+        }
+    }
+
+    fn collect(
+        v: &Value,
+        nodes: &mut Vec<serde_json::Value>,
+        edges: &mut Vec<serde_json::Value>,
+        seen_nodes: &mut std::collections::BTreeSet<String>,
+        seen_edges: &mut std::collections::BTreeSet<(i64, i64, String)>,
+    ) {
+        match v {
+            Value::Node(n) => push_node(n, nodes, seen_nodes),
+            Value::Relationship(r) => push_edge(r, edges, seen_edges),
+            Value::Path(p) => {
+                let Path { nodes: pn, rels: pr } = p.as_ref();
+                for n in pn {
+                    push_node(n, nodes, seen_nodes);
+                }
+                for r in pr {
+                    push_edge(r, edges, seen_edges);
+                }
+            }
+            Value::List(l) => {
+                for item in l.iter() {
+                    collect(item, nodes, edges, seen_nodes, seen_edges);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for row in &result.rows {
+        for v in row {
+            collect(v, &mut nodes, &mut edges, &mut seen_nodes, &mut seen_edges);
+        }
+    }
+    // Edges must not reference missing endpoints (cytoscape rejects that):
+    // stub a node for anything the query didn't return.
+    let ids: std::collections::BTreeSet<String> =
+        nodes.iter().filter_map(|n| n["data"]["id"].as_str().map(str::to_string)).collect();
+    for e in &edges {
+        for endpoint in ["source", "target"] {
+            if let Some(id) = e["data"][endpoint].as_str() {
+                if !ids.contains(id) {
+                    nodes.push(serde_json::json!({
+                        "data": {"id": id, "label": "?", "type": "query", "ecosystem": null}
+                    }));
+                }
+            }
+        }
+    }
+    serde_json::json!({ "nodes": nodes, "edges": edges })
 }
 
 fn json_to_value(v: &serde_json::Value) -> Value {
