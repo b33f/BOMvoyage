@@ -12,6 +12,9 @@ const ECOSYSTEM_COLORS = {
 let cy = null;
 let commits = [];            // [{sha, date, summary, author}] oldest-first
 let selectedPackage = null;  // purl
+let showTransitive = null;   // null = auto-decide on the first load
+let lastElements = null;     // full as-of element set from /api/graph
+const DIRECT_ONLY_THRESHOLD = 20;
 
 async function fetchJson(url, opts) {
   const res = await fetch(url, opts);
@@ -41,8 +44,18 @@ function setAsOfLabel(asOf) {
     : label;
 }
 
+function visibleElements(elements) {
+  if (showTransitive) return elements;
+  const nodes = elements.nodes.filter((n) => n.data.scope === "direct");
+  const ids = new Set(nodes.map((n) => n.data.id));
+  const edges = elements.edges.filter(
+    (e) => ids.has(e.data.source) && ids.has(e.data.target)
+  );
+  return { nodes, edges };
+}
+
 function buildGraph(payload) {
-  const elements = payload.elements;
+  const elements = visibleElements(payload.elements);
   if (!cy) {
     cy = cytoscape({
       container: document.getElementById("cy"),
@@ -97,11 +110,33 @@ async function refresh() {
   const q = asOf ? `?as_of=${encodeURIComponent(asOf)}` : "";
   try {
     const payload = await fetchJson(`/api/graph${q}`);
+    lastElements = payload.elements;
+    // Auto-decide once: big graphs start direct-only.
+    if (showTransitive === null) {
+      showTransitive = lastElements.nodes.length <= DIRECT_ONLY_THRESHOLD;
+    }
+    updateScopeToggle();
     buildGraph(payload);
     if (selectedPackage) showPackage(selectedPackage, asOf);
   } catch (e) {
     document.getElementById("asof-label").textContent = `error: ${e.message}`;
   }
+}
+
+function updateScopeToggle() {
+  const btn = document.getElementById("scope-toggle");
+  if (!btn || !lastElements) return;
+  const total = lastElements.nodes.length;
+  const direct = lastElements.nodes.filter((n) => n.data.scope === "direct").length;
+  btn.textContent = showTransitive
+    ? `all dependencies (${total}) — direct only`
+    : `direct dependencies (${direct}) — show all (${total})`;
+}
+
+function toggleScope() {
+  showTransitive = !showTransitive;
+  updateScopeToggle();
+  if (lastElements) buildGraph({ elements: lastElements });
 }
 
 async function showPackage(purl, asOfOverride) {
@@ -178,6 +213,7 @@ async function init() {
     refresh();
   });
   document.getElementById("run-cypher").addEventListener("click", runCypher);
+  document.getElementById("scope-toggle").addEventListener("click", toggleScope);
 
   await refresh();
 }
