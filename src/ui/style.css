@@ -86,3 +86,5 @@ main { flex: 1; display: flex; min-height: 0; }
   color: var(--muted);
   margin-left: 8px;
 }
+#views { display: inline-flex; gap: 4px; }
+#views button.active { border-color: var(--accent); color: var(--accent); }

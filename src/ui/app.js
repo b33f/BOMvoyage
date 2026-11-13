@@ -14,6 +14,7 @@ let commits = [];            // [{sha, date, summary, author}] oldest-first
 let selectedPackage = null;  // purl
 let showTransitive = null;   // null = auto-decide on the first load
 let lastElements = null;     // full as-of element set from /api/graph
+let view = "devs";           // 'devs' (default) | 'areas' | 'deps'
 const DIRECT_ONLY_THRESHOLD = 20;
 
 async function fetchJson(url, opts) {
@@ -45,17 +46,66 @@ function setAsOfLabel(asOf) {
 }
 
 function visibleElements(elements) {
-  if (showTransitive) return elements;
-  const nodes = elements.nodes.filter((n) => n.data.scope === "direct");
-  const ids = new Set(nodes.map((n) => n.data.id));
+  const nodes = elements.nodes.map((n) => ({
+    data: Object.assign({ type: "package" }, n.data),
+  }));
+  if (showTransitive) return { nodes, edges: elements.edges };
+  const direct = nodes.filter((n) => n.data.scope === "direct");
+  const ids = new Set(direct.map((n) => n.data.id));
   const edges = elements.edges.filter(
     (e) => ids.has(e.data.source) && ids.has(e.data.target)
   );
-  return { nodes, edges };
+  return { nodes: direct, edges };
+}
+
+/// Repo sub-area of one manifest path: its directory ("(root)" for top-level).
+function areaOf(manifest) {
+  const dir = manifest.includes("/") ? manifest.slice(0, manifest.lastIndexOf("/")) : "";
+  return dir || "(root)";
+}
+
+/// Build the elements for the active view from the as-of package set.
+/// All three views share the package nodes (scope-filtered); they differ in
+/// what the packages are linked to:
+///   devs  — the developer who added each package (bipartite person→package)
+///   areas — the repo sub-area whose manifest declares each package
+///   deps  — the DEPENDS_ON edges from the lockfile graph
+function buildViewElements(elements) {
+  if (view === "deps") return elements;
+  const groupOf = view === "devs"
+    ? (d) => d.added_by || "(unknown)"
+    : (d) => areaOf(d.manifest || "");
+  const prefix = view === "devs" ? "dev:" : "area:";
+
+  const nodes = [];
+  const edges = [];
+  const groups = new Map(); // group name -> node
+  for (const n of elements.nodes) {
+    const group = groupOf(n.data);
+    if (!groups.has(group)) {
+      groups.set(group, {
+        data: {
+          id: prefix + group,
+          label: group,
+          type: prefix.slice(0, -1),
+          ecosystem: view === "devs" ? "person" : "area",
+        },
+      });
+    }
+    edges.push({
+      data: {
+        source: prefix + group,
+        target: n.data.id,
+        source_kind: "attribution",
+      },
+    });
+    nodes.push(n);
+  }
+  return { nodes: [...groups.values()].concat(nodes), edges };
 }
 
 function buildGraph(payload) {
-  const elements = visibleElements(payload.elements);
+  const elements = buildViewElements(visibleElements(payload.elements));
   if (!cy) {
     cy = cytoscape({
       container: document.getElementById("cy"),
@@ -79,6 +129,32 @@ function buildGraph(payload) {
           style: { width: 12, height: 12, "border-width": 1, "border-color": "#2a3038" },
         },
         {
+          selector: "node[type = 'dev']",
+          style: {
+            shape: "round-rectangle",
+            width: "label",
+            height: 22,
+            "background-color": "#4c8dff",
+            "font-size": 11,
+            "text-valign": "center",
+            "text-margin-y": 0,
+            padding: "6px",
+          },
+        },
+        {
+          selector: "node[type = 'area']",
+          style: {
+            shape: "round-rectangle",
+            width: "label",
+            height: 22,
+            "background-color": "#7a5cff",
+            "font-size": 10,
+            "text-valign": "center",
+            "text-margin-y": 0,
+            padding: "6px",
+          },
+        },
+        {
           selector: "edge",
           style: {
             width: 1.5,
@@ -92,11 +168,17 @@ function buildGraph(payload) {
           selector: "edge[source_kind = 'synthesized']",
           style: { "line-style": "dashed" },
         },
+        {
+          selector: "edge[source_kind = 'attribution']",
+          style: { "line-color": "#4c8dff88", "target-arrow-color": "#4c8dff88" },
+        },
       ],
       layout: { name: "cose", animate: false, randomize: false },
       wheelSensitivity: 0.2,
     });
-    cy.on("tap", "node", (evt) => showPackage(evt.target.data("id")));
+    cy.on("tap", "node[type]", (evt) => {
+      if (evt.target.data("type") === "package") showPackage(evt.target.data("id"));
+    });
   } else {
     cy.elements().remove();
     cy.add(elements);
@@ -214,8 +296,19 @@ async function init() {
   });
   document.getElementById("run-cypher").addEventListener("click", runCypher);
   document.getElementById("scope-toggle").addEventListener("click", toggleScope);
+  for (const btn of document.querySelectorAll("[data-view]")) {
+    btn.addEventListener("click", () => setView(btn.dataset.view));
+  }
 
   await refresh();
+}
+
+function setView(newView) {
+  view = newView;
+  for (const btn of document.querySelectorAll("[data-view]")) {
+    btn.classList.toggle("active", btn.dataset.view === view);
+  }
+  if (lastElements) buildGraph({ elements: lastElements });
 }
 
 async function runCypher() {
