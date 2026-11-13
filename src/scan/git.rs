@@ -39,6 +39,36 @@ pub fn head_sha(repo: &std::path::Path) -> ToolResult<String> {
     Ok(String::from_utf8_lossy(&out).trim().to_string())
 }
 
+/// HEAD as a `CommitInfo` — the current snapshot's one history record.
+pub fn head_commit(repo: &std::path::Path) -> ToolResult<CommitInfo> {
+    let fmt = "%H%x1f%aN%x1f%aE%x1f%aI%x1f%s";
+    let out = run_simple(
+        repo,
+        &["log".into(), "-1".into(), format!("--format={fmt}")],
+    )?;
+    let line = String::from_utf8_lossy(&out);
+    let fields: Vec<&str> = line.trim_end_matches('\n').split('\x1f').collect();
+    if fields.len() != 5 {
+        return Err(ToolError::GitOutput(format!(
+            "HEAD record has {} fields, expected 5",
+            fields.len()
+        )));
+    }
+    let date = fields[3].to_string();
+    if !valid_author_date(&date) {
+        return Err(ToolError::GitOutput(format!(
+            "unexpected author date shape: {date}"
+        )));
+    }
+    Ok(CommitInfo {
+        sha: fields[0].to_string(),
+        author_name: fields[1].to_string(),
+        author_email: fields[2].to_string(),
+        date: to_utc_iso(&date)?,
+        summary: fields[4].to_string(),
+    })
+}
+
 fn run_simple(repo: &std::path::Path, args: &[String]) -> ToolResult<Vec<u8>> {
     let mut child = git_child(repo, args)?;
     let stdout = capped_stdout(&mut child, 64 * 1024 * 1024)?;

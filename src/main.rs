@@ -28,7 +28,7 @@ fn main() {
 
 fn run(cli: &Cli) -> ToolResult<()> {
     match &cli.command {
-        None => all_in_one(&cli.path, Path::new("bomvoyage.rl"), 8334, 5000),
+        None => all_in_one(&cli.path, &cli.db, 8334, 5000),
         Some(Command::Scan {
             path,
             db,
@@ -42,11 +42,9 @@ fn run(cli: &Cli) -> ToolResult<()> {
             open,
             max_commits,
         }) => {
-            if !db.exists() {
-                eprintln!("no graph database at {}; scanning first", db.display());
-                cmd_scan(path, db, false, *max_commits)?;
-            }
-            cmd_serve(db, *port, *open)
+            let db = Arc::new(Database::open(&db.to_string_lossy())?);
+            graph::ensure_schema(&db)?;
+            scan_and_serve(path, db, *port, *open, *max_commits)
         }
         Some(Command::Export {
             db,
@@ -58,10 +56,88 @@ fn run(cli: &Cli) -> ToolResult<()> {
     }
 }
 
-/// The demo path: `bomvoyage` in a repo = scan + serve + open the browser.
+/// The demo path: `bomvoyage` in a repo = fast current scan, serve
+/// immediately with the browser opened, and keep walking git history in the
+/// background to fill in the time-travel data.
 fn all_in_one(path: &Path, db: &Path, port: u16, max_commits: u64) -> ToolResult<()> {
-    cmd_scan(path, db, false, max_commits)?;
-    cmd_serve(db, port, true)
+    let db = Arc::new(Database::open(&db.to_string_lossy())?);
+    graph::ensure_schema(&db)?;
+    scan_and_serve(path, db, port, true, max_commits)
+}
+
+/// Shared serve-path logic: bring the database's CURRENT state up to date
+/// fast (worktree-only, provisional intervals), then walk the git history in
+/// a background thread while the explorer is already being served.
+fn scan_and_serve(
+    path: &Path,
+    db: Arc<Database>,
+    port: u16,
+    open_browser: bool,
+    max_commits: u64,
+) -> ToolResult<()> {
+    let head = scan::git::head_sha(path)?;
+    let history_current = graph::stored_history_head(&db)?.as_deref() == Some(head.as_str());
+
+    if !history_current {
+        eprintln!("scanning current dependencies of {} …", path.display());
+        let out = scan::current_only(path)?;
+        for w in &out.warnings {
+            eprintln!("warning: {w}");
+        }
+        eprintln!(
+            "{} current packages, {} usage sites — exploring now; walking git history in the background",
+            out.packages.len(),
+            out.imports.len()
+        );
+        graph::write_scan(&db, &out)?;
+    } else {
+        eprintln!(
+            "history is current (HEAD {}); serving",
+            &head[..head.len().min(12)]
+        );
+    }
+
+    if !history_current {
+        let bg_path = path.to_path_buf();
+        let bg_db = Arc::clone(&db);
+        std::thread::spawn(move || {
+            eprintln!("background: walking git history for time travel …");
+            match scan::run(
+                &bg_path,
+                scan::ScanCaps {
+                    max_commits,
+                    ..scan::ScanCaps::default()
+                },
+            ) {
+                Ok(out) => {
+                    if let Err(e) = graph::write_scan(&bg_db, &out) {
+                        eprintln!("background history write failed: {e}");
+                        return;
+                    }
+                    eprintln!(
+                        "background: history complete — {} packages across {} commits, time travel ready",
+                        out.packages.len(),
+                        out.commits.len()
+                    );
+                }
+                Err(e) => eprintln!("background history scan failed: {e}"),
+            }
+        });
+    }
+
+    let repo_name = project_name(&db)?;
+    if open_browser {
+        let url = format!("http://127.0.0.1:{port}");
+        let _ = std::process::Command::new(if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        })
+        .arg(&url)
+        .spawn();
+    }
+    server::serve(db, &repo_name, port)?;
+    Ok(())
 }
 
 fn cmd_scan(path: &Path, db: &Path, force: bool, max_commits: u64) -> ToolResult<()> {
@@ -73,10 +149,12 @@ fn cmd_scan(path: &Path, db: &Path, force: bool, max_commits: u64) -> ToolResult
 
     if db.exists() && !force {
         let existing = SbomGraph::open_read_only(db)?;
-        if let Some(head) = existing.stored_head()? {
+        if let Some(head) = existing.stored_history_head()? {
             let current = scan::git::head_sha(path)?;
             if head == current {
-                eprintln!("graph is current (HEAD {head}); nothing to do (use --force to rescan)");
+                eprintln!(
+                    "history is current (HEAD {head}); nothing to do (use --force to rescan)"
+                );
                 return Ok(());
             }
             eprintln!(
@@ -104,25 +182,8 @@ fn cmd_scan(path: &Path, db: &Path, force: bool, max_commits: u64) -> ToolResult
     Ok(())
 }
 
-fn cmd_serve(db: &Path, port: u16, open_browser: bool) -> ToolResult<()> {
-    let graph = SbomGraph::open_writable(db)?;
-    let repo_name = project_name(&graph)?;
-    if open_browser {
-        let url = format!("http://127.0.0.1:{port}");
-        let _ = std::process::Command::new(if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        })
-        .arg(&url)
-        .spawn();
-    }
-    server::serve(Arc::new(graph.db), &repo_name, port)?;
-    Ok(())
-}
-
-fn project_name(graph: &SbomGraph) -> ToolResult<String> {
-    let mut conn = graph.db.connect()?;
+fn project_name(db: &Database) -> ToolResult<String> {
+    let mut conn = db.connect()?;
     let result = conn.query(graph::queries::META)?;
     Ok(result
         .rows
@@ -143,7 +204,7 @@ fn cmd_export(
     let as_of_instant = graph::resolve_as_of(&mut conn, as_of)?;
     let rows = export::live_rows(&mut conn, &as_of_instant)?;
     let edges = export::live_edges(&mut conn, &as_of_instant)?;
-    let repo_name = project_name(&graph)?;
+    let repo_name = project_name(&graph.db)?;
     let text = export::render(format, &rows, &edges, &repo_name, &as_of_instant);
     match output {
         Some(path) => {

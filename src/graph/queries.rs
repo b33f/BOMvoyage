@@ -63,7 +63,7 @@ MATCH (c:Commit) RETURN c.sha AS sha, c.date AS date, c.summary AS summary,
 pub const META: &str = r#"
 MATCH (pr:Project)
 RETURN pr.name AS name, pr.head_sha AS head_sha, pr.last_scanned_at AS scanned_at,
-       pr.scan_quality AS scan_quality
+       pr.scan_quality AS scan_quality, pr.history_head_sha AS history_head
 "#;
 
 /// Resolve an as-of token that looks like a sha prefix to its commit date.

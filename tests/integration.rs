@@ -193,8 +193,7 @@ fn temporal_sbom_end_to_end() {
 
 /// Run the scanner as a library call (the binary's `scan` path).
 fn bomvoyage_scan(repo: &Path, db: &Path) -> bomvoyage::scan::ScanOutput {
-    let out =
-        bomvoyage::scan::run(repo, bomvoyage::scan::ScanCaps::default()).expect("scan runs");
+    let out = bomvoyage::scan::run(repo, bomvoyage::scan::ScanCaps::default()).expect("scan runs");
     let graph = bomvoyage::graph::SbomGraph::open_writable(db).expect("db opens");
     graph.write_scan(&out).expect("write runs");
     out

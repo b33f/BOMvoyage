@@ -16,14 +16,38 @@ pub struct SbomGraph {
     pub db: Database,
 }
 
+/// Create the indexes on an opened database (idempotent).
+pub fn ensure_schema(db: &Database) -> ToolResult<()> {
+    let mut conn = db.connect()?;
+    for ddl in schema::INDEX_DDL {
+        conn.query(ddl)?;
+    }
+    Ok(())
+}
+
+/// Head of the last COMPLETED history walk recorded on the Project node.
+pub fn stored_history_head(db: &Database) -> ToolResult<Option<String>> {
+    let mut conn = db.connect()?;
+    let result = conn.query(queries::META)?;
+    if result.rows.is_empty() {
+        return Ok(None);
+    }
+    let head = result
+        .header
+        .columns
+        .iter()
+        .position(|c| c == "history_head")
+        .and_then(|i| result.rows[0].get(i))
+        .and_then(|v| v.as_string().map(str::to_string))
+        .filter(|s| !s.is_empty());
+    Ok(head)
+}
+
 impl SbomGraph {
     /// Open (creating if needed) a writable graph database.
     pub fn open_writable(path: &std::path::Path) -> ToolResult<Self> {
         let db = Database::open(&path.to_string_lossy())?;
-        let mut conn = db.connect()?;
-        for ddl in schema::INDEX_DDL {
-            conn.query(ddl)?;
-        }
+        ensure_schema(&db)?;
         Ok(Self { db })
     }
 
@@ -37,6 +61,24 @@ impl SbomGraph {
             },
         )?;
         Ok(Self { db })
+    }
+
+    /// History head recorded by the last COMPLETED history walk, if any.
+    pub fn stored_history_head(&self) -> ToolResult<Option<String>> {
+        let mut conn = self.db.connect()?;
+        let result = conn.query(queries::META)?;
+        if result.rows.is_empty() {
+            return Ok(None);
+        }
+        let head = result
+            .header
+            .columns
+            .iter()
+            .position(|c| c == "history_head")
+            .and_then(|i| result.rows[0].get(i))
+            .and_then(|v| v.as_string().map(str::to_string))
+            .filter(|s| !s.is_empty());
+        Ok(head)
     }
 
     /// Head sha recorded by the last scan, if any.
@@ -59,8 +101,25 @@ impl SbomGraph {
     /// Write a full scan. Idempotent: every MERGE keys on natural identity,
     /// so replaying the same scan leaves the graph unchanged.
     pub fn write_scan(&self, out: &ScanOutput) -> ToolResult<()> {
-        let mut conn = self.db.connect()?;
+        write_scan(&self.db, out)
+    }
+}
+
+/// Write a scan output. Idempotent: every MERGE keys on natural identity, so
+/// replaying the same scan leaves the graph unchanged. Callable from any
+/// thread holding the `Database` — the background history walker shares the
+/// same instance the HTTP server is serving from.
+pub fn write_scan(db: &Database, out: &ScanOutput) -> ToolResult<()> {
+    {
+        let mut conn = db.connect()?;
         conn.begin()?;
+
+        // A full scan replaces the provisional intervals a current-only scan
+        // left behind (its real intervals carry real opening commits).
+        if !out.provisional {
+            conn.query(write::DELETE_PROVISIONAL)?;
+            conn.query(write::DELETE_PROVISIONAL_ADDED)?;
+        }
 
         // Nodes first.
         write::flush(
@@ -107,6 +166,16 @@ impl SbomGraph {
         write::str_row(&mut proj, "scanned_at", &now_iso());
         write::str_row(&mut proj, "tool_version", env!("CARGO_PKG_VERSION"));
         write::str_row(&mut proj, "scan_quality", scan_quality);
+        // The history pointer only advances when the walk is complete for
+        // this head — a provisional scan leaves it pointing at the past (or
+        // empty), which is what tells the next run (and the UI) to keep
+        // loading history.
+        let history_head = if out.history_complete {
+            out.head_sha.clone()
+        } else {
+            String::new()
+        };
+        write::str_row(&mut proj, "history_head", &history_head);
         write::flush(&mut conn, write::MERGE_PROJECT, vec![proj])?;
 
         let mut manifests: BTreeMap<String, (&str, &'static str)> = BTreeMap::new();
@@ -156,6 +225,7 @@ impl SbomGraph {
                 "key".into(),
                 Value::String(format!("{}|{}|{}", i.manifest, i.pkg.purl(), i.since.sha).into()),
             );
+            r.insert("provisional".into(), Value::Bool(out.provisional));
             declares.push(r);
         }
         write::flush(&mut conn, write::MERGE_DECLARES, declares)?;
@@ -224,6 +294,7 @@ impl SbomGraph {
             write::str_row(&mut r, "purl", &i.pkg.purl());
             write::str_row(&mut r, "sha", &i.since.sha);
             write::str_row(&mut r, "date", &i.since.date);
+            r.insert("provisional".into(), Value::Bool(out.provisional));
             added_rows.push(r);
             if let Some(c) = &i.until {
                 let mut r = write::Row::new();
@@ -263,7 +334,7 @@ impl SbomGraph {
         write::flush(&mut conn, write::MERGE_ROOT, vec![root_link])?;
 
         conn.commit()?;
-        self.db.checkpoint()?;
+        db.checkpoint()?;
         Ok(())
     }
 }

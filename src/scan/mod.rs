@@ -190,6 +190,12 @@ pub struct ScanOutput {
     pub commits: Vec<CommitInfo>,
     /// (commit sha, manifest path) pairs from the history walk.
     pub touched: Vec<(String, String)>,
+    /// True for a current-snapshot-only scan: its DECLARES/ADDED intervals are
+    /// marked provisional and replaced when the full history lands.
+    pub provisional: bool,
+    /// True when the history walk is complete for `head_sha` — the writer
+    /// records that on the Project node so a re-scan can skip the walk.
+    pub history_complete: bool,
 }
 
 /// One history record: (commit, [(manifest path, content at that commit —
@@ -198,6 +204,68 @@ pub type HistoryRecord = (CommitInfo, Vec<(String, Option<Vec<u8>>)>);
 
 /// The full history walk, oldest first.
 pub type ManifestHistory = Vec<HistoryRecord>;
+
+/// Scan only the worktree's current state: no history walk. Intervals open
+/// at HEAD and are marked provisional — the full scan replaces them. This is
+/// the phase-1 fast path: the UI can serve the current SBOM while the
+/// history walk fills in the time-travel data in the background.
+pub fn current_only(repo: &std::path::Path) -> ToolResult<ScanOutput> {
+    if !repo.join(".git").exists() {
+        return Err(ToolError::NotARepository(repo.display().to_string()));
+    }
+    let mut warnings = Vec::new();
+    let manifests = discover::discover_manifests(repo)?;
+    if manifests.is_empty() {
+        return Err(ToolError::NoManifests);
+    }
+    for m in &manifests {
+        let flat = matches!(
+            m.kind,
+            ManifestKind::PoetryLock
+                | ManifestKind::UvLock
+                | ManifestKind::GradleLockfile
+                | ManifestKind::GoSum
+        );
+        if flat {
+            warnings.push(ScanWarning::FlatResolution {
+                path: m.path.clone(),
+                note: "this lockfile is a flat list; transitive structure comes from the manifests, edges are synthesized from the root".into(),
+            });
+        }
+    }
+
+    // One synthetic history record: HEAD. The replay machinery derives the
+    // current dependency set, its edges and its intervals exactly as a full
+    // walk would — the only difference is that everything opens at HEAD.
+    let head = git::head_commit(repo)?;
+    let mut files = Vec::new();
+    for m in &manifests {
+        let content = std::fs::read(repo.join(&m.path)).ok();
+        files.push((m.path.clone(), content));
+    }
+    let history: ManifestHistory = vec![(head, files)];
+    let replay = replay_history(history, ScanCaps::default(), &mut warnings);
+
+    let all_packages: Vec<PkgRef> = replay.packages.values().cloned().collect();
+    let imports = usage::scan_usage(repo, &all_packages, &manifests, &mut warnings)?;
+
+    Ok(ScanOutput {
+        repo_name: repo
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| repo.display().to_string()),
+        head_sha: git::head_sha(repo)?,
+        intervals: replay.intervals,
+        dep_edges: replay.dep_edges,
+        packages: all_packages,
+        imports,
+        warnings,
+        commits: replay.commits,
+        touched: replay.touched,
+        provisional: true,
+        history_complete: false,
+    })
+}
 
 /// Caps for bounded scanning; hitting one warns, never truncates silently.
 #[derive(Debug, Clone, Copy)]
@@ -269,6 +337,8 @@ pub fn run(repo: &std::path::Path, caps: ScanCaps) -> ToolResult<ScanOutput> {
         warnings,
         commits: replay.commits,
         touched: replay.touched,
+        provisional: false,
+        history_complete: true,
     })
 }
 
@@ -470,6 +540,7 @@ mod tests {
         s.into_bytes()
     }
 
+    #[allow(clippy::type_complexity)] // test fixture shorthand
     fn history_entry(
         sha: &str,
         date: &str,

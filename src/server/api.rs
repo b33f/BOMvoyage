@@ -93,6 +93,10 @@ impl Api {
         let head_sha = cell(&result, 0, "head_sha");
         let scanned_at = cell(&result, 0, "scanned_at");
         let scan_quality = cell(&result, 0, "scan_quality");
+        let history_head = cell(&result, 0, "history_head");
+        // The time-travel data is ready when the history walk has completed
+        // for exactly the head the current scan recorded.
+        let history_current = !history_head.is_empty() && history_head == head_sha;
 
         let counts = conn
             .query("MATCH (p:Package) RETURN p.ecosystem AS eco, count(DISTINCT p.name) AS n ORDER BY n DESC")
@@ -133,6 +137,7 @@ impl Api {
             "head_sha": head_sha,
             "last_scanned_at": scanned_at,
             "scan_quality": scan_quality,
+            "history_current": history_current,
             "total_packages": total_packages,
             "ecosystems": ecosystems,
         }))

@@ -43,6 +43,19 @@ function setAsOfLabel(asOf) {
   document.getElementById("asof-label").textContent = commit
     ? `${commit.sha.slice(0, 10)} · ${commit.date.slice(0, 10)} · ${commit.summary}`
     : label;
+
+  // The banner is the unmissable time-travel signal: gold when viewing the
+  // past, absent at HEAD.
+  const banner = document.getElementById("travel-banner");
+  if (!commit) {
+    banner.hidden = true;
+    banner.textContent = "";
+  } else {
+    banner.hidden = false;
+    banner.textContent =
+      `⏱ TIME TRAVEL — viewing dependencies as of ${commit.date.slice(0, 10)} ` +
+      `(commit ${commit.sha.slice(0, 10)}: ${commit.summary}) — press "reset to HEAD" to return`;
+  }
 }
 
 function visibleElements(elements) {
@@ -299,8 +312,85 @@ async function init() {
   for (const btn of document.querySelectorAll("[data-view]")) {
     btn.addEventListener("click", () => setView(btn.dataset.view));
   }
+  wireCypherPresets();
 
   await refresh();
+
+  // The current SBOM is already on screen; poll until the background history
+  // walk completes, then light up time travel.
+  pollHistoryStatus(meta.history_current);
+}
+
+function pollHistoryStatus(current) {
+  if (current) {
+    document.getElementById("meta").dataset.history = "ready";
+    return;
+  }
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  badge.id = "history-badge";
+  badge.textContent = "history loading… time travel not ready yet";
+  document.getElementById("meta").appendChild(badge);
+  const timer = setInterval(async () => {
+    try {
+      const meta = await fetchJson("/api/meta");
+      if (meta.history_current) {
+        clearInterval(timer);
+        badge.textContent = "time travel ready";
+        badge.remove();
+        const commitPayload = await fetchJson("/api/commits");
+        commits = commitPayload.rows || [];
+        const slider = document.getElementById("slider");
+        slider.max = Math.max(commits.length - 1, 0);
+        slider.value = slider.max;
+        refresh();
+      }
+    } catch (_) {
+      // server momentarily busy — keep polling
+    }
+  }, 2000);
+}
+
+const CYPHER_PRESETS = [
+  {
+    name: "most-used packages",
+    cypher:
+      "MATCH (f:File)-[r:IMPORTS]->(p:Package)\nRETURN p.name AS package, count(DISTINCT f) AS files\nORDER BY files DESC LIMIT 10",
+  },
+  {
+    name: "who added the most",
+    cypher:
+      "MATCH (x:Person)-[r:ADDED]->(p:Package)\nRETURN x.name AS developer, count(DISTINCT p) AS added\nORDER BY added DESC LIMIT 10",
+  },
+  {
+    name: "recently added",
+    cypher:
+      "MATCH (m:Manifest)-[r:DECLARES]->(p:Package)\nWHERE r.removed_date IS NULL\nRETURN p.purl AS purl, r.since_date AS added, r.added_by_name AS by\nORDER BY r.since_date DESC LIMIT 10",
+  },
+  {
+    name: "duplicate versions",
+    cypher:
+      "MATCH (p:Package)\nWITH p.name AS name, count(*) AS versions, collect(p.version) AS vs\nWHERE versions > 1\nRETURN name, versions, vs ORDER BY versions DESC",
+  },
+  {
+    name: "removed dependencies",
+    cypher:
+      "MATCH (m:Manifest)-[r:DECLARES]->(p:Package)\nWHERE r.removed_date IS NOT NULL\nRETURN DISTINCT p.purl AS purl, r.removed_date AS removed, r.added_by_name AS added_by\nORDER BY removed DESC LIMIT 10",
+  },
+];
+
+function wireCypherPresets() {
+  const holder = document.getElementById("cypher-presets");
+  for (const preset of CYPHER_PRESETS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = preset.name;
+    btn.addEventListener("click", () => {
+      document.getElementById("cypher-input").value = preset.cypher;
+      runCypher();
+    });
+    holder.appendChild(btn);
+  }
 }
 
 function setView(newView) {
