@@ -15,6 +15,7 @@ let selectedPackage = null;  // purl
 let showTransitive = null;   // null = auto-decide on the first load
 let lastElements = null;     // full as-of element set from /api/graph
 let view = "devs";           // 'devs' (default) | 'areas' | 'deps'
+let queryElements = null;    // raw-Cypher result shown in the main canvas
 const DIRECT_ONLY_THRESHOLD = 20;
 
 async function fetchJson(url, opts) {
@@ -183,7 +184,7 @@ function buildGraph(payload) {
         },
         {
           selector: "edge[source_kind = 'attribution']",
-          style: { "line-color": "#4c8dff88", "target-arrow-color": "#4c8dff88" },
+          style: { "line-color": "rgba(76, 141, 255, 0.55)", "target-arrow-color": "rgba(76, 141, 255, 0.55)" },
         },
       ],
       layout: { name: "cose", animate: false, randomize: false },
@@ -211,11 +212,27 @@ async function refresh() {
       showTransitive = lastElements.nodes.length <= DIRECT_ONLY_THRESHOLD;
     }
     updateScopeToggle();
-    buildGraph(payload);
+    renderCurrentView();
     if (selectedPackage) showPackage(selectedPackage, asOf);
   } catch (e) {
     document.getElementById("asof-label").textContent = `error: ${e.message}`;
   }
+}
+
+/// The main canvas shows the active view — or, while one is active, the raw
+/// query result.
+function renderCurrentView() {
+  if (queryElements) {
+    buildGraph({ elements: queryElements });
+    return;
+  }
+  buildGraph({ elements: buildViewElements(visibleElements(lastElements)) });
+}
+
+function clearQueryResult() {
+  queryElements = null;
+  document.getElementById("clear-query").hidden = true;
+  renderCurrentView();
 }
 
 function updateScopeToggle() {
@@ -231,7 +248,7 @@ function updateScopeToggle() {
 function toggleScope() {
   showTransitive = !showTransitive;
   updateScopeToggle();
-  if (lastElements) buildGraph({ elements: lastElements });
+  renderCurrentView();
 }
 
 async function showPackage(purl, asOfOverride) {
@@ -309,6 +326,7 @@ async function init() {
   });
   document.getElementById("run-cypher").addEventListener("click", runCypher);
   document.getElementById("scope-toggle").addEventListener("click", toggleScope);
+  document.getElementById("clear-query").addEventListener("click", clearQueryResult);
   for (const btn of document.querySelectorAll("[data-view]")) {
     btn.addEventListener("click", () => setView(btn.dataset.view));
   }
@@ -395,10 +413,12 @@ function wireCypherPresets() {
 
 function setView(newView) {
   view = newView;
+  queryElements = null;
+  document.getElementById("clear-query").hidden = true;
   for (const btn of document.querySelectorAll("[data-view]")) {
     btn.classList.toggle("active", btn.dataset.view === view);
   }
-  if (lastElements) buildGraph({ elements: lastElements });
+  renderCurrentView();
 }
 
 async function runCypher() {
@@ -411,6 +431,15 @@ async function runCypher() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cypher: cypherInput }),
     });
+    const elements = res.elements;
+    if (elements && elements.nodes.length > 0) {
+      // Graph-shaped result: take over the main canvas.
+      queryElements = elements;
+      const clearBtn = document.getElementById("clear-query");
+      clearBtn.hidden = false;
+      clearBtn.textContent =
+        `clear query result (${elements.nodes.length} nodes, ${elements.edges.length} edges)`;
+    }
     out.textContent = JSON.stringify(res.rows ?? res, null, 2).slice(0, 20000);
   } catch (e) {
     out.textContent = `error: ${e.message}`;
