@@ -115,8 +115,38 @@ $ bomvoyage query --db bomvoyage.rl "MATCH (m:Manifest)-[r:DECLARES]->(p:Package
 
 ## Building
 
+You need Rust (1.88+) via [rustup](https://rustup.rs/), and `git` on your PATH.
+
+**macOS** — install [Homebrew](https://brew.sh/) if you don't have it, then:
+
 ```console
-$ cargo build --release      # Rust 1.88+ (edition 2021)
+$ brew install rustup
+$ rustup default stable
+```
+
+(or the official script instead of Homebrew: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
+
+**Linux** (Debian/Ubuntu, Fedora, Arch — the official script works everywhere):
+
+```console
+$ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+$ source "$HOME/.cargo/env"
+```
+
+**Windows** — download and run [rustup-init.exe](https://win.rustup.rs/), or:
+
+```console
+PS> winget install Rustlang.Rustup
+PS> rustup default stable
+```
+
+(Windows also needs the MSVC build tools — rustup-init offers to install
+"Visual Studio Community" with the right C++ workload if they're missing.)
+
+Then, from a clone of this repository:
+
+```console
+$ cargo build --release      # binary at target/release/bomvoyage
 ```
 
 The only runtime dependency that matters is [`relate`](https://crates.io/crates/relate)
