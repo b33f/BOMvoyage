@@ -117,14 +117,28 @@ $ bomvoyage query --db bomvoyage.rl "MATCH (m:Manifest)-[r:DECLARES]->(p:Package
 
 You need Rust (1.88+) via [rustup](https://rustup.rs/), and `git` on your PATH.
 
-**macOS** — install [Homebrew](https://brew.sh/) if you don't have it, then:
+**macOS** — the simplest path is the official script (it installs to
+`~/.cargo/bin` and adds it to your shell's PATH for you):
+
+```console
+$ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Close and reopen your terminal (or `source "$HOME/.cargo/env"`), then verify:
+
+```console
+$ cargo --version
+```
+
+If you prefer Homebrew: `brew install rustup` does **not** put `cargo` on your
+PATH automatically (the formula is keg-only), so add it and install a toolchain:
 
 ```console
 $ brew install rustup
 $ rustup default stable
+$ echo 'export PATH="/opt/homebrew/opt/rustup/bin:$PATH"' >> ~/.zshrc
+$ source ~/.zshrc
 ```
-
-(or the official script instead of Homebrew: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 
 **Linux** (Debian/Ubuntu, Fedora, Arch — the official script works everywhere):
 
