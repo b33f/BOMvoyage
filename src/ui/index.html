@@ -22,7 +22,10 @@
     <button data-view="deps" type="button">dependency graph</button>
   </span>
   <button id="clear-query" type="button" hidden></button>
-  <button id="scope-toggle" type="button">dependencies</button>
+  <label class="switch" title="include transitive dependencies">
+    <input type="checkbox" id="scope-toggle">
+    <span id="scope-label">direct only</span>
+  </label>
   <button id="reset-btn" type="button">reset to HEAD</button>
 </section>
 <div id="travel-banner" hidden></div>
