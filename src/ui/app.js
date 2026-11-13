@@ -90,40 +90,61 @@ function areaOf(manifest) {
 /// Build the elements for the active view from the as-of package set.
 /// All three views share the package nodes (scope-filtered); they differ in
 /// what the packages are linked to:
-///   devs  — the developer who added each package (bipartite person→package)
-///   areas — the repo sub-area whose manifest declares each package
-///   deps  — the DEPENDS_ON edges from the lockfile graph
+///   devs  — DIRECT packages hang off the developer who added them;
+///           transitive packages hang off the DEPENDS_ON graph that pulled
+///           them in, never off a developer
+///   areas — packages hang off the repo sub-area whose manifest declares them
+///   deps  — the raw DEPENDS_ON edges from the lockfile graph
 function buildViewElements(elements) {
   if (view === "deps") return elements;
+  const prefix = view === "devs" ? "dev:" : "area:";
   const groupOf = view === "devs"
     ? (d) => d.added_by || "(unknown)"
     : (d) => areaOf(d.manifest || "");
-  const prefix = view === "devs" ? "dev:" : "area:";
 
   const nodes = [];
   const edges = [];
   const groups = new Map(); // group name -> node
+  const pkgIds = new Set(elements.nodes.map((n) => n.data.id));
+
   for (const n of elements.nodes) {
-    const group = groupOf(n.data);
-    if (!groups.has(group)) {
-      groups.set(group, {
+    // Developers are attributed only for direct dependencies; transitive
+    // packages connect through the dependency graph instead.
+    const attributed = view === "areas" || n.data.scope === "direct";
+    if (attributed) {
+      const group = groupOf(n.data);
+      if (!groups.has(group)) {
+        groups.set(group, {
+          data: {
+            id: prefix + group,
+            label: group,
+            type: prefix.slice(0, -1),
+            ecosystem: view === "devs" ? "person" : "area",
+          },
+        });
+      }
+      edges.push({
         data: {
-          id: prefix + group,
-          label: group,
-          type: prefix.slice(0, -1),
-          ecosystem: view === "devs" ? "person" : "area",
+          source: prefix + group,
+          target: n.data.id,
+          source_kind: "attribution",
         },
       });
     }
-    edges.push({
-      data: {
-        source: prefix + group,
-        target: n.data.id,
-        source_kind: "attribution",
-      },
-    });
     nodes.push(n);
   }
+
+  if (view === "devs") {
+    // The lockfile graph chains transitive packages back to the direct ones
+    // that pulled them in (and to each other). In direct-only mode those
+    // edges vanish with their transitive endpoints.
+    for (const e of elements.edges) {
+      if (pkgIds.has(e.data.source) && pkgIds.has(e.data.target)) {
+        edges.push(e);
+      }
+    }
+  }
+
   return { nodes: [...groups.values()].concat(nodes), edges };
 }
 
@@ -246,17 +267,19 @@ function clearQueryResult() {
 }
 
 function updateScopeToggle() {
-  const btn = document.getElementById("scope-toggle");
-  if (!btn || !lastElements) return;
+  const box = document.getElementById("scope-toggle");
+  const label = document.getElementById("scope-label");
+  if (!box || !lastElements) return;
   const total = lastElements.nodes.length;
   const direct = lastElements.nodes.filter((n) => n.data.scope === "direct").length;
-  btn.textContent = showTransitive
-    ? `all dependencies (${total}) — direct only`
-    : `direct dependencies (${direct}) — show all (${total})`;
+  box.checked = showTransitive;
+  label.textContent = showTransitive
+    ? `direct + transitive (${total})`
+    : `direct only (${direct})`;
 }
 
 function toggleScope() {
-  showTransitive = !showTransitive;
+  showTransitive = document.getElementById("scope-toggle").checked;
   updateScopeToggle();
   renderCurrentView();
 }
@@ -335,7 +358,7 @@ async function init() {
     refresh();
   });
   document.getElementById("run-cypher").addEventListener("click", runCypher);
-  document.getElementById("scope-toggle").addEventListener("click", toggleScope);
+  document.getElementById("scope-toggle").addEventListener("change", toggleScope);
   document.getElementById("clear-query").addEventListener("click", clearQueryResult);
   for (const btn of document.querySelectorAll("[data-view]")) {
     btn.addEventListener("click", () => setView(btn.dataset.view));
