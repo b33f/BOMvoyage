@@ -61,7 +61,7 @@ pub enum Command {
         #[arg(long, short, value_name = "FILE", default_value = "bomvoyage.rl")]
         db: std::path::PathBuf,
         /// Port to listen on
-        #[arg(long, value_name = "PORT", default_value_t = 8420)]
+        #[arg(long, value_name = "PORT", default_value_t = 8334)]
         port: u16,
         /// Open the browser after starting
         #[arg(long)]
