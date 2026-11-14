@@ -100,12 +100,23 @@ $ bomvoyage export --format cyclonedx -o sbom-now.cdx.json
 
 SPDX 2.3 and CycloneDX 1.5, with dependency relationships, at any point in history.
 
-## Try it on RelateDB's own repository
+## Query the graph
+
+After a scan, the graph is open for read-only Cypher. Find the most-repinned
+dependencies in whatever repo you just scanned:
 
 ```console
-$ cd relate          # the RelateDB engine repository
-$ bomvoyage scan . --max-commits 300
-$ bomvoyage query --db bomvoyage.rl "MATCH (m:Manifest)-[r:DECLARES]->(p:Package {name: 'parquet'})
+$ bomvoyage query --db bomvoyage.rl "MATCH (m:Manifest)-[r:DECLARES]->(p:Package)
+  RETURN p.name AS name, count(*) AS versions ORDER BY versions DESC LIMIT 10"
+```
+
+Then pick a name from that list and replay its timeline — who added it, when,
+every version bump. (`serde` below is a dependency of BOMvoyage itself — in a
+repo without `serde`, substitute any name from the first query; a name that
+isn't in the repo returns zero rows by design.)
+
+```console
+$ bomvoyage query --db bomvoyage.rl "MATCH (m:Manifest)-[r:DECLARES]->(p:Package {name: 'serde'})
   RETURN p.purl, r.version_requirement, r.since_date, r.added_by_name ORDER BY r.since_date"
 ```
 
