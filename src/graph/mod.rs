@@ -111,15 +111,9 @@ impl SbomGraph {
 /// same instance the HTTP server is serving from.
 pub fn write_scan(db: &Database, out: &ScanOutput) -> ToolResult<()> {
     {
+        // Every flush commits per batch (see `write::flush`): a single
+        // transaction for a whole history can exceed the WAL record cap.
         let mut conn = db.connect()?;
-        conn.begin()?;
-
-        // A full scan replaces the provisional intervals a current-only scan
-        // left behind (its real intervals carry real opening commits).
-        if !out.provisional {
-            conn.query(write::DELETE_PROVISIONAL)?;
-            conn.query(write::DELETE_PROVISIONAL_ADDED)?;
-        }
 
         // Nodes first.
         write::flush(
@@ -170,12 +164,11 @@ pub fn write_scan(db: &Database, out: &ScanOutput) -> ToolResult<()> {
         // this head — a provisional scan leaves it pointing at the past (or
         // empty), which is what tells the next run (and the UI) to keep
         // loading history.
-        let history_head = if out.history_complete {
-            out.head_sha.clone()
-        } else {
-            String::new()
-        };
-        write::str_row(&mut proj, "history_head", &history_head);
+        // Written empty here and set for real only as the LAST write below,
+        // so a history write interrupted between batches never claims to
+        // be complete.
+        write::str_row(&mut proj, "history_head", "");
+        let mut final_proj = proj.clone();
         write::flush(&mut conn, write::MERGE_PROJECT, vec![proj])?;
 
         let mut manifests: BTreeMap<String, (&str, &'static str)> = BTreeMap::new();
@@ -333,7 +326,22 @@ pub fn write_scan(db: &Database, out: &ScanOutput) -> ToolResult<()> {
         write::str_row(&mut root_link, "purl", &root_purl);
         write::flush(&mut conn, write::MERGE_ROOT, vec![root_link])?;
 
-        conn.commit()?;
+        // A full scan replaces the provisional intervals a current-only scan
+        // left behind. Deleting them only now (after the real intervals are
+        // in) means the live UI never sees an empty graph mid-write.
+        if !out.provisional {
+            write::in_txn(&mut conn, |c| {
+                c.query(write::DELETE_PROVISIONAL).map(|_| ())
+            })?;
+            write::in_txn(&mut conn, |c| {
+                c.query(write::DELETE_PROVISIONAL_ADDED).map(|_| ())
+            })?;
+        }
+
+        if out.history_complete {
+            write::str_row(&mut final_proj, "history_head", &out.head_sha);
+            write::flush(&mut conn, write::MERGE_PROJECT, vec![final_proj])?;
+        }
         db.checkpoint()?;
         Ok(())
     }
@@ -352,6 +360,10 @@ fn manifest_kind_label(kind: crate::scan::ManifestKind) -> &'static str {
         crate::scan::ManifestKind::CargoLock => "cargo-lock",
         crate::scan::ManifestKind::GoMod => "go-mod",
         crate::scan::ManifestKind::GoSum => "go-sum",
+        crate::scan::ManifestKind::PackageJson => "package-json",
+        crate::scan::ManifestKind::PackageLock => "package-lock",
+        crate::scan::ManifestKind::YarnLock => "yarn-lock",
+        crate::scan::ManifestKind::PnpmLock => "pnpm-lock",
     }
 }
 

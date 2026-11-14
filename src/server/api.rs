@@ -317,24 +317,64 @@ fn graph_elements_of(result: &relate::QueryResult) -> serde_json::Value {
         format!("n{id}")
     }
 
+    fn props_json(props: &relate::PropertyMap) -> serde_json::Value {
+        let mut o = serde_json::Map::new();
+        for (k, v) in props.iter() {
+            o.insert(k.clone(), value_to_json(v));
+        }
+        serde_json::Value::Object(o)
+    }
+
     fn node_json(n: &Node) -> serde_json::Value {
+        let kind = n.labels.first().cloned().unwrap_or_default();
+        let prop = |k: &str| {
+            n.properties
+                .get(k)
+                .and_then(|v| v.as_string().map(str::to_string))
+        };
         // The friendliest identity property wins; else the first label.
-        let label = ["name", "purl", "email", "path", "summary", "title"]
+        let mut label = ["name", "path", "email", "purl", "summary", "title", "sha"]
             .iter()
-            .find_map(|k| n.properties.get(k))
-            .and_then(|v| v.as_string().map(str::to_string))
+            .find_map(|k| prop(k))
             .unwrap_or_else(|| {
-                n.labels
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| format!("n{}", n.id))
+                if kind.is_empty() {
+                    format!("n{}", n.id)
+                } else {
+                    kind.clone()
+                }
             });
+        match kind.as_str() {
+            "Package" => {
+                if let Some(v) = prop("version").filter(|v| !v.is_empty()) {
+                    label = format!("{label}@{v}");
+                }
+            }
+            "Commit" => {
+                if let Some(sha) = prop("sha") {
+                    label = sha.chars().take(8).collect();
+                }
+            }
+            "File" | "Manifest" => {
+                // Long paths drown the canvas: show the last two segments
+                // (`export/mod.rs`); the full path stays in props.
+                let parts: Vec<&str> = label.rsplitn(3, '/').collect();
+                if parts.len() == 3 {
+                    label = format!("{}/{}", parts[1], parts[0]);
+                }
+            }
+            _ => {}
+        }
         serde_json::json!({
             "data": {
                 "id": node_id(n.id),
                 "label": label,
                 "type": "query",
-                "ecosystem": n.labels.first().map(|l| l.to_ascii_lowercase()),
+                "kind": kind,
+                "labels": n.labels.as_ref(),
+                "ecosystem": if kind == "Package" { prop("ecosystem") } else { None },
+                "scope": prop("scope"),
+                "purl": prop("purl"),
+                "props": props_json(&n.properties),
             }
         })
     }
@@ -342,10 +382,12 @@ fn graph_elements_of(result: &relate::QueryResult) -> serde_json::Value {
     fn edge_json(r: &Relationship) -> serde_json::Value {
         serde_json::json!({
             "data": {
+                "id": format!("r{}", r.id),
                 "source": node_id(r.start),
                 "target": node_id(r.end),
                 "label": r.rel_type,
                 "source_kind": "query",
+                "props": props_json(&r.properties),
             }
         })
     }
@@ -363,9 +405,9 @@ fn graph_elements_of(result: &relate::QueryResult) -> serde_json::Value {
     fn push_edge(
         r: &Relationship,
         edges: &mut Vec<serde_json::Value>,
-        seen: &mut std::collections::BTreeSet<(i64, i64, String)>,
+        seen: &mut std::collections::BTreeSet<String>,
     ) {
-        if seen.insert((r.start, r.end, r.rel_type.clone())) {
+        if seen.insert(format!("r{}", r.id)) {
             edges.push(edge_json(r));
         }
     }
@@ -375,13 +417,16 @@ fn graph_elements_of(result: &relate::QueryResult) -> serde_json::Value {
         nodes: &mut Vec<serde_json::Value>,
         edges: &mut Vec<serde_json::Value>,
         seen_nodes: &mut std::collections::BTreeSet<String>,
-        seen_edges: &mut std::collections::BTreeSet<(i64, i64, String)>,
+        seen_edges: &mut std::collections::BTreeSet<String>,
     ) {
         match v {
             Value::Node(n) => push_node(n, nodes, seen_nodes),
             Value::Relationship(r) => push_edge(r, edges, seen_edges),
             Value::Path(p) => {
-                let Path { nodes: pn, rels: pr } = p.as_ref();
+                let Path {
+                    nodes: pn,
+                    rels: pr,
+                } = p.as_ref();
                 for n in pn {
                     push_node(n, nodes, seen_nodes);
                 }
@@ -405,14 +450,16 @@ fn graph_elements_of(result: &relate::QueryResult) -> serde_json::Value {
     }
     // Edges must not reference missing endpoints (cytoscape rejects that):
     // stub a node for anything the query didn't return.
-    let ids: std::collections::BTreeSet<String> =
-        nodes.iter().filter_map(|n| n["data"]["id"].as_str().map(str::to_string)).collect();
+    let ids: std::collections::BTreeSet<String> = nodes
+        .iter()
+        .filter_map(|n| n["data"]["id"].as_str().map(str::to_string))
+        .collect();
     for e in &edges {
         for endpoint in ["source", "target"] {
             if let Some(id) = e["data"][endpoint].as_str() {
                 if !ids.contains(id) {
                     nodes.push(serde_json::json!({
-                        "data": {"id": id, "label": "?", "type": "query", "ecosystem": null}
+                        "data": {"id": id, "label": "?", "type": "query", "kind": "", "ecosystem": null, "props": {}}
                     }));
                 }
             }
@@ -478,6 +525,29 @@ fn value_to_json(v: &Value) -> serde_json::Value {
             }
             serde_json::Value::Object(o)
         }
+        Value::Node(n) => {
+            let mut o = serde_json::Map::new();
+            o.insert("_labels".into(), serde_json::json!(n.labels.as_ref()));
+            for (k, v) in n.properties.iter() {
+                o.insert(k.clone(), value_to_json(v));
+            }
+            serde_json::Value::Object(o)
+        }
+        Value::Relationship(r) => {
+            let mut o = serde_json::Map::new();
+            o.insert(
+                "_type".into(),
+                serde_json::Value::String(r.rel_type.clone()),
+            );
+            for (k, v) in r.properties.iter() {
+                o.insert(k.clone(), value_to_json(v));
+            }
+            serde_json::Value::Object(o)
+        }
+        Value::Path(p) => serde_json::json!({
+            "_path_length": p.rels.len(),
+            "nodes": p.nodes.iter().map(|n| value_to_json(&Value::Node(n.clone().into()))).collect::<Vec<_>>(),
+        }),
         other => serde_json::Value::String(other.to_string()),
     }
 }
