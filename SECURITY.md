@@ -68,4 +68,11 @@ findings:
   checkouts do not persist git credentials, jobs run under timeouts, and
   Dependabot watches both the actions and the Rust crate graph (Cargo.lock is
   committed, so builds are `--locked` against pinned, checksummed versions).
+  A `cargo-deny` CI job enforces RustSec advisories and restricts dependency
+  sources to crates.io (a git dependency cannot sneak into the graph).
   CodeQL scans the Rust code weekly for security findings.
+- **Release binaries carry signed build provenance**: every release artifact is
+  attested with a Sigstore-based build provenance statement from GitHub's
+  public OIDC. Anyone can verify a downloaded binary was built by this
+  repository's workflow from a specific commit:
+  `gh attestation verify <archive> -R b33f/BOMvoyage`.
