@@ -128,13 +128,16 @@ fn scan_and_serve(
     let repo_name = project_name(&db)?;
     if open_browser {
         let url = format!("http://127.0.0.1:{port}");
-        let _ = std::process::Command::new(if cfg!(target_os = "macos") {
-            "open"
+        let opened = if cfg!(target_os = "macos") {
+            std::process::Command::new("open").arg(&url).spawn()
+        } else if cfg!(target_os = "windows") {
+            std::process::Command::new("cmd")
+                .args(["/C", "start", &url])
+                .spawn()
         } else {
-            "xdg-open"
-        })
-        .arg(&url)
-        .spawn();
+            std::process::Command::new("xdg-open").arg(&url).spawn()
+        };
+        let _ = opened;
     }
     server::serve(db, &repo_name, port)?;
     Ok(())
@@ -177,7 +180,9 @@ fn cmd_scan(path: &Path, db: &Path, force: bool, max_commits: u64) -> ToolResult
     );
 
     let graph = SbomGraph::open_writable(db)?;
+    let t = std::time::Instant::now();
     graph.write_scan(&out)?;
+    eprintln!("  phase: write {:?}", t.elapsed());
     eprintln!("wrote {}", db.display());
     Ok(())
 }

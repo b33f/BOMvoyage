@@ -27,6 +27,9 @@ pub fn scan_usage(
     for p in packages {
         let base = match p.eco {
             Eco::Java => p.name.split(':').next_back().unwrap_or(&p.name).to_string(),
+            // npm names are the import specifier verbatim (`@types/node`,
+            // `lodash.merge`); never strip the scope.
+            Eco::Node => p.name.clone(),
             _ => p.name.rsplit('/').next().unwrap_or(&p.name).to_string(),
         };
         by_key.entry(normalize(&base)).or_insert_with(|| p.purl());
@@ -43,6 +46,7 @@ pub fn scan_usage(
                 Eco::Java => "java",
                 Eco::Rust => "rs",
                 Eco::Go => "go",
+                Eco::Node => "js",
             })
             .collect();
         langs.sort_unstable();
@@ -60,33 +64,66 @@ pub fn scan_usage(
         files.truncate(MAX_FILES);
     }
 
-    let mut out = Vec::new();
-    for (path, language) in files {
-        let Ok(content) = std::fs::read(repo.join(&path)) else {
-            continue;
-        };
-        let Ok(text) = String::from_utf8(content) else {
-            continue;
-        };
-        for (key, symbol) in extract_symbols(&text, language) {
-            if let Some(purl) = by_key.get(&normalize(&key)) {
-                out.push(ImportSite {
-                    file: path.clone(),
-                    purl: purl.clone(),
-                    symbol,
-                });
-            } else if language == "go" {
-                // Go import paths are module-path prefixes: match the longest.
-                if let Some(purl) = longest_prefix(&by_key, &key) {
-                    out.push(ImportSite {
-                        file: path.clone(),
-                        purl,
-                        symbol,
-                    });
+    // Per-file scan in parallel: reading and line-scanning a source file
+    // shares nothing with the others, and monorepos run to tens of thousands
+    // of them. Workers pull indices off a shared counter and tag their finds
+    // with the file index, so the merged order matches the serial walk.
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(16);
+    let next_file = std::sync::atomic::AtomicUsize::new(0);
+    let partial: std::sync::Mutex<Vec<(usize, Vec<ImportSite>)>> =
+        std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| {
+                let mut local: Vec<(usize, Vec<ImportSite>)> = Vec::new();
+                loop {
+                    let i = next_file.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if i >= files.len() {
+                        break;
+                    }
+                    let (path, language) = &files[i];
+                    let Ok(content) = std::fs::read(repo.join(path)) else {
+                        continue;
+                    };
+                    let Ok(text) = String::from_utf8(content) else {
+                        continue;
+                    };
+                    let mut sites = Vec::new();
+                    for (key, symbol) in extract_symbols(&text, language) {
+                        if let Some(purl) = by_key.get(&normalize(&key)) {
+                            sites.push(ImportSite {
+                                file: path.clone(),
+                                purl: purl.clone(),
+                                symbol,
+                            });
+                        } else if *language == "go" {
+                            // Go import paths are module-path prefixes: match
+                            // the longest.
+                            if let Some(purl) = longest_prefix(&by_key, &key) {
+                                sites.push(ImportSite {
+                                    file: path.clone(),
+                                    purl,
+                                    symbol,
+                                });
+                            }
+                        }
+                    }
+                    if !sites.is_empty() {
+                        local.push((i, sites));
+                    }
                 }
-            }
+                if !local.is_empty() {
+                    partial.lock().expect("usage partial mutex").extend(local);
+                }
+            });
         }
-    }
+    });
+    let mut tagged = partial.into_inner().expect("usage partial mutex");
+    tagged.sort_by_key(|(i, _)| *i);
+    let out = tagged.into_iter().flat_map(|(_, sites)| sites).collect();
     Ok(out)
 }
 
@@ -146,10 +183,89 @@ fn extract_symbols(text: &str, language: &str) -> Vec<(String, String)> {
                     out.push((root, rest.to_string()));
                 }
             }
+            "js" => {
+                for spec in js_specifiers(line) {
+                    if let Some(pkg) = js_package_of(&spec) {
+                        out.push((pkg.to_string(), spec));
+                    }
+                }
+            }
             _ => {}
         }
     }
     out
+}
+
+/// Module specifiers on one JS/TS line: `import … from 'x'`, `import 'x'`,
+/// `export … from 'x'`, `require('x')`, `import('x')` (string literals only),
+/// and the closing `} from 'x'` line of a multi-line import.
+fn js_specifiers(line: &str) -> Vec<String> {
+    if line.starts_with("//") || line.starts_with('*') || line.starts_with("/*") {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let quoted_after = |rest: &str| -> Option<String> {
+        let rest = rest.trim_start();
+        let q = rest
+            .chars()
+            .next()
+            .filter(|c| matches!(c, '\'' | '"' | '`'))?;
+        let body = &rest[1..];
+        let end = body.find(q)?;
+        let spec = &body[..end];
+        (!spec.is_empty() && !spec.contains("${")).then(|| spec.to_string())
+    };
+    let is_statement = line.starts_with("import")
+        || line.starts_with("export")
+        || line.starts_with('}')
+        || line.contains(" from ");
+    if is_statement {
+        if let Some(i) = line.rfind(" from ") {
+            out.extend(quoted_after(&line[i + 6..]));
+        } else if let Some(rest) = line.strip_prefix("}from") {
+            out.extend(quoted_after(rest));
+        } else if let Some(rest) = line.strip_prefix("import ") {
+            out.extend(quoted_after(rest)); // side-effect import 'x'
+        }
+    }
+    for call in ["require(", "import("] {
+        let mut from = 0;
+        while let Some(i) = line[from..].find(call) {
+            let start = from + i;
+            // `foo.require(` / `myimport(` are not module loads.
+            let prev = line[..start].chars().next_back();
+            if !prev.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '$') {
+                out.extend(quoted_after(&line[start + call.len()..]));
+            }
+            from = start + call.len();
+        }
+    }
+    out
+}
+
+/// The npm package a bare specifier resolves to (`@s/n/sub` → `@s/n`,
+/// `lodash/fp` → `lodash`); None for relative/absolute paths, URLs, path
+/// aliases (`@/x`, `~/x`, `#x`) and Node built-ins.
+fn js_package_of(spec: &str) -> Option<&str> {
+    if spec.starts_with('.')
+        || spec.starts_with('/')
+        || spec.starts_with('~')
+        || spec.starts_with('#')
+        || spec.starts_with("@/")
+        || spec.starts_with("node:")
+        || spec.contains("://")
+    {
+        return None;
+    }
+    let mut parts = spec.splitn(3, '/');
+    let first = parts.next()?;
+    if first.starts_with('@') {
+        let second = parts.next()?;
+        let end = first.len() + 1 + second.len();
+        Some(&spec[..end])
+    } else {
+        Some(first)
+    }
 }
 
 /// Longest registered module path that is a prefix of `import_path`.
@@ -215,6 +331,14 @@ fn extension_matches(path: &str, language: &str) -> bool {
         "java" => path.ends_with(".java") || path.ends_with(".kt"),
         "rs" => path.ends_with(".rs"),
         "go" => path.ends_with(".go"),
+        "js" => {
+            [
+                ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".vue", ".svelte",
+            ]
+            .iter()
+            .any(|ext| path.ends_with(ext))
+                && !path.ends_with(".min.js")
+        }
         _ => false,
     }
 }
@@ -256,6 +380,42 @@ mod tests {
             "github.com/pkg/errors".to_string(),
             "github.com/pkg/errors".to_string()
         )));
+    }
+
+    #[test]
+    fn js_imports_extract_package_names() {
+        let src = r#"
+import React, { useState } from 'react';
+import type { Foo } from "@acme/types/sub";
+import './styles.css';
+import 'reflect-metadata';
+const _ = require("lodash/fp");
+const lazy = await import('chart.js');
+export { x } from "zod";
+import fs from 'node:fs';
+import { a } from '@/components/a';
+import {
+  b,
+} from 'date-fns';
+// import nope from 'commented-out';
+const r = myrequire('not-a-module');
+"#;
+        let keys: Vec<String> = extract_symbols(src, "js")
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                "react",
+                "@acme/types",
+                "reflect-metadata",
+                "lodash",
+                "chart.js",
+                "zod",
+                "date-fns"
+            ]
+        );
     }
 
     #[test]
