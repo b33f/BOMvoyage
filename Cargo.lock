@@ -310,6 +310,7 @@ name = "bomvoyage"
 version = "0.1.2"
 dependencies = [
  "clap",
+ "fastrand",
  "flate2",
  "httparse",
  "quick-xml",
