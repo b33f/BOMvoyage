@@ -1,4 +1,4 @@
-/* BOMvoyage: interactive graph + time slider + inspector + raw Cypher. */
+/* BOMvoyage: interactive graph + time slider + inspector + Cypher console. */
 "use strict";
 
 const ECOSYSTEM_COLORS = {
@@ -6,20 +6,38 @@ const ECOSYSTEM_COLORS = {
   java: "#e76f00",
   rust: "#dea584",
   go: "#00add8",
+  node: "#8cc84b",
   generic: "#8b949e",
 };
+
+/// Node kinds a query can return, with their canvas look. Package nodes are
+/// coloured by ecosystem instead.
+const KIND_STYLES = {
+  Person: { color: "#4c8dff", shape: "round-rectangle", legend: "sq" },
+  Manifest: { color: "#a371f7", shape: "round-tag", legend: "sq" },
+  File: { color: "#6e7681", shape: "rectangle", legend: "sq" },
+  Commit: { color: "#3fb950", shape: "diamond", legend: "dia" },
+  Project: { color: "#f0b429", shape: "star", legend: "" },
+};
+
+const STALE_AS_OF = "9999-12-31T23:59:59Z"; // $as_of at HEAD
 
 let cy = null;
 let commits = [];            // [{sha, date, summary, author}] oldest-first
 let selectedPackage = null;  // purl
 let showTransitive = null;   // null = auto-decide on the first load
 let lastElements = null;     // full as-of element set from /api/graph
-let view = "devs";           // 'devs' (default) | 'areas' | 'deps'
+let view = "devs";           // 'devs' (default) | 'areas'
 let queryElements = null;    // raw-Cypher result shown in the main canvas
+let lastCypher = null;       // the query behind queryElements
 let days = [];               // distinct commit dates (yyyy-mm-dd), ascending
 let selectedDate = null;     // explicit calendar pick (yyyy-mm-dd)
 let calMonth = null;         // month the calendar popover is showing
+let playing = false;         // autoplay sweep running?
+let playTimer = null;        // pending next-step timeout of the sweep
 const DIRECT_ONLY_THRESHOLD = 20;
+
+const $ = (id) => document.getElementById(id);
 
 async function fetchJson(url, opts) {
   const res = await fetch(url, opts);
@@ -28,53 +46,44 @@ async function fetchJson(url, opts) {
   return body;
 }
 
+// ---------------------------------------------------------------- time
+
 function asOfValue() {
   // Calendar pick wins; else the slider's DAY (end of day, so the whole
   // day's commits are included). Past the last day = HEAD.
   if (selectedDate) return `${selectedDate}T23:59:59Z`;
-  const idx = Number(document.getElementById("slider").value);
+  const idx = Number($("slider").value);
   if (commits.length === 0 || idx >= days.length) return null; // HEAD
   return `${days[idx]}T23:59:59Z`;
 }
 
-function asOfLabel(asOf) {
-  return asOf ?? "HEAD";
-}
-
 function setAsOfLabel(asOf) {
-  const label = asOfLabel(asOf);
-  const banner = document.getElementById("travel-banner");
+  const banner = $("travel-banner");
+  $("reset-btn").disabled = !asOf;
   if (!asOf) {
-    document.getElementById("asof-label").textContent = label;
+    $("asof-chip").textContent = "HEAD";
     banner.hidden = true;
-    banner.textContent = "";
-    markCalendarSelection(null);
+    banner.innerHTML = "";
+    markCalendarSelection();
     return;
   }
   const day = asOf.slice(0, 10);
+  $("asof-chip").textContent = day;
   const dayCommits = commits.filter((c) => c.date.startsWith(day));
   const last = dayCommits[dayCommits.length - 1];
   const detail = last
-    ? `${dayCommits.length} commit${dayCommits.length === 1 ? "" : "s"} that day · last: ${last.sha.slice(0, 10)} ${last.summary}`
+    ? `${dayCommits.length} commit${dayCommits.length === 1 ? "" : "s"} that day · last ${last.sha.slice(0, 8)} — ${last.summary}`
     : "no commits that day — the SBOM as it stood before the next one";
-  document.getElementById("asof-label").textContent = detail;
-
   // The banner is the unmissable time-travel signal: gold when viewing the
   // past, absent at HEAD.
   banner.hidden = false;
-  banner.textContent =
-    `⏱ TIME TRAVEL — viewing dependencies as of ${day} (${detail}) — press "reset to HEAD" to return`;
-  markCalendarSelection(day);
+  banner.innerHTML =
+    `<span>⏱</span><strong>Time travel — dependencies as of ${escapeHtml(day)}</strong>` +
+    `<span class="detail">${escapeHtml(detail)}</span>`;
+  markCalendarSelection();
 }
 
-/// Fit all elements, but never zoom a small graph into absurdity.
-function fitReasonably() {
-  cy.fit(undefined, 40);
-  if (cy.zoom() > 1.2) {
-    cy.zoom(1.2);
-    cy.center();
-  }
-}
+// ---------------------------------------------------------------- views
 
 function visibleElements(elements) {
   const nodes = elements.nodes.map((n) => ({
@@ -96,15 +105,13 @@ function areaOf(manifest) {
 }
 
 /// Build the elements for the active view from the as-of package set.
-/// All three views share the package nodes (scope-filtered); they differ in
+/// Both views share the package nodes (scope-filtered); they differ in
 /// what the packages are linked to:
 ///   devs  — DIRECT packages hang off the developer who added them;
 ///           transitive packages hang off the DEPENDS_ON graph that pulled
 ///           them in, never off a developer
 ///   areas — packages hang off the repo sub-area whose manifest declares them
-///   deps  — the raw DEPENDS_ON edges from the lockfile graph
 function buildViewElements(elements) {
-  if (view === "deps") return elements;
   const prefix = view === "devs" ? "dev:" : "area:";
   const groupOf = view === "devs"
     ? (d) => d.added_by || "(unknown)"
@@ -116,186 +123,413 @@ function buildViewElements(elements) {
   const pkgIds = new Set(elements.nodes.map((n) => n.data.id));
 
   for (const n of elements.nodes) {
-    // Developers are attributed only for direct dependencies; transitive
-    // packages connect through the dependency graph instead.
     const attributed = view === "areas" || n.data.scope === "direct";
     if (attributed) {
       const group = groupOf(n.data);
       if (!groups.has(group)) {
         groups.set(group, {
-          data: {
-            id: prefix + group,
-            label: group,
-            type: prefix.slice(0, -1),
-            ecosystem: view === "devs" ? "person" : "area",
-          },
+          data: { id: prefix + group, label: group, type: prefix.slice(0, -1) },
         });
       }
       edges.push({
-        data: {
-          source: prefix + group,
-          target: n.data.id,
-          source_kind: "attribution",
-        },
+        data: { source: prefix + group, target: n.data.id, source_kind: "attribution" },
       });
     }
     nodes.push(n);
   }
 
   if (view === "devs") {
-    // The lockfile graph chains transitive packages back to the direct ones
-    // that pulled them in (and to each other). In direct-only mode those
-    // edges vanish with their transitive endpoints.
     for (const e of elements.edges) {
-      if (pkgIds.has(e.data.source) && pkgIds.has(e.data.target)) {
-        edges.push(e);
-      }
+      if (pkgIds.has(e.data.source) && pkgIds.has(e.data.target)) edges.push(e);
     }
   }
-
   return { nodes: [...groups.values()].concat(nodes), edges };
 }
 
-function buildGraph(elements) {
-  if (!cy) {
-    cy = cytoscape({
-      container: document.getElementById("cy"),
-      elements,
-      style: [
-        {
-          selector: "node",
-          style: {
-            "background-color": (n) => ECOSYSTEM_COLORS[n.data("ecosystem")] || "#8b949e",
-            label: "data(label)",
-            color: "#e6e8eb",
-            "font-size": 9,
-            "text-valign": "bottom",
-            "text-margin-y": 4,
-            width: 18,
-            height: 18,
-          },
-        },
-        {
-          selector: "node[scope = 'transitive']",
-          style: { width: 12, height: 12, "border-width": 1, "border-color": "#2a3038" },
-        },
-        {
-          selector: "node[type = 'dev']",
-          style: {
-            shape: "round-rectangle",
-            width: "label",
-            height: 22,
-            "background-color": "#4c8dff",
-            "font-size": 11,
-            "text-valign": "center",
-            "text-margin-y": 0,
-            padding: "6px",
-          },
-        },
-        {
-          selector: "node[type = 'area']",
-          style: {
-            shape: "round-rectangle",
-            width: "label",
-            height: 22,
-            "background-color": "#7a5cff",
-            "font-size": 10,
-            "text-valign": "center",
-            "text-margin-y": 0,
-            padding: "6px",
-          },
-        },
-        {
-          selector: "edge",
-          style: {
-            width: 1.5,
-            "line-color": "#2a3038",
-            "target-arrow-color": "#2a3038",
-            "target-arrow-shape": "triangle",
-            "curve-style": "bezier",
-          },
-        },
-        {
-          selector: "edge[source_kind = 'synthesized']",
-          style: { "line-style": "dashed" },
-        },
-        {
-          selector: "edge[source_kind = 'attribution']",
-          style: { "line-color": "rgba(76, 141, 255, 0.55)", "target-arrow-color": "rgba(76, 141, 255, 0.55)" },
-        },
-      ],
-      layout: { name: "cose", animate: false, randomize: false },
-      wheelSensitivity: 0.2,
+// ---------------------------------------------------------------- canvas
+
+function nodeColor(n) {
+  const kind = n.data("kind");
+  if (kind && KIND_STYLES[kind]) return KIND_STYLES[kind].color;
+  return ECOSYSTEM_COLORS[n.data("ecosystem")] || ECOSYSTEM_COLORS.generic;
+}
+
+const CY_STYLE = [
+  {
+    selector: "node",
+    style: {
+      "background-color": nodeColor,
+      label: "data(label)",
+      color: "#c9d1d9",
+      "font-size": 9,
+      "text-valign": "bottom",
+      "text-margin-y": 4,
+      "text-outline-color": "#0b0e14",
+      "text-outline-width": 2,
+      "min-zoomed-font-size": 7,
+      width: 18,
+      height: 18,
+      "border-width": 0,
+      "transition-property": "opacity",
+      "transition-duration": "120ms",
+    },
+  },
+  { selector: "node[scope = 'transitive']", style: { width: 12, height: 12 } },
+  {
+    selector: "node[type = 'dev'], node[type = 'area']",
+    style: {
+      shape: "round-rectangle",
+      width: "label",
+      height: 22,
+      padding: "7px",
+      "background-color": "#1f3a66",
+      "border-width": 1,
+      "border-color": "#4c8dff",
+      color: "#e6e8eb",
+      "font-size": 11,
+      "font-weight": 600,
+      "text-valign": "center",
+      "text-margin-y": 0,
+      "text-outline-width": 0,
+    },
+  },
+  {
+    selector: "node[type = 'area']",
+    style: { "background-color": "#2e2160", "border-color": "#a371f7" },
+  },
+  // Query-result nodes: shape by kind.
+  ...Object.entries(KIND_STYLES).map(([kind, s]) => ({
+    selector: `node[kind = '${kind}']`,
+    style: { shape: s.shape, width: kind === "Person" ? 22 : 16, height: kind === "Person" ? 22 : 16 },
+  })),
+  { selector: "node[kind = 'Package']", style: { width: 18, height: 18 } },
+  {
+    selector: "edge",
+    style: {
+      width: 1.2,
+      "line-color": "#30363d",
+      "target-arrow-color": "#30363d",
+      "target-arrow-shape": "triangle",
+      "arrow-scale": 0.8,
+      "curve-style": "bezier",
+      "transition-property": "opacity",
+      "transition-duration": "120ms",
+    },
+  },
+  { selector: "edge[source_kind = 'synthesized']", style: { "line-style": "dashed" } },
+  {
+    selector: "edge[source_kind = 'attribution']",
+    style: { "line-color": "rgba(76,141,255,0.45)", "target-arrow-color": "rgba(76,141,255,0.45)" },
+  },
+  {
+    selector: "edge[source_kind = 'query']",
+    style: {
+      label: "data(label)",
+      "font-size": 7,
+      color: "#6e7681",
+      "text-rotation": "autorotate",
+      "text-background-color": "#0b0e14",
+      "text-background-opacity": 1,
+      "text-background-padding": "1px",
+      "min-zoomed-font-size": 8,
+      "line-color": "#3a4350",
+      "target-arrow-color": "#3a4350",
+    },
+  },
+  { selector: "node.dense", style: { "min-zoomed-font-size": 11 } },
+  { selector: ".faded", style: { opacity: 0.12 } },
+  {
+    selector: "node:selected",
+    style: { "border-width": 3, "border-color": "#ffffff", "border-opacity": 0.9 },
+  },
+  {
+    selector: "edge.hl",
+    style: { "line-color": "#4c8dff", "target-arrow-color": "#4c8dff", width: 2, color: "#c9d1d9" },
+  },
+];
+
+/// Hub-and-spoke results (one developer → 200 packages) knot up under a
+/// force layout; rings by degree read far better.
+function layoutOptions(n) {
+  if (cy && n > 40) {
+    const maxDeg = cy.nodes().max((x) => x.degree()).value;
+    if (maxDeg > n * 0.3) {
+      // Hubs in the middle; the rest packed into rings whose capacity grows
+      // outward, so 200 spokes make a compact disc, not one giant circle.
+      const ring = new Map();
+      const rest = cy.nodes().filter((x) => x.degree() <= n * 0.3)
+        .sort((a, b) => b.degree() - a.degree() || String(a.data("label")).localeCompare(b.data("label")));
+      let r = 0, used = 0;
+      rest.forEach((x) => {
+        if (used >= 14 * (r + 1)) { r++; used = 0; }
+        ring.set(x.id(), r);
+        used++;
+      });
+      return {
+        name: "concentric",
+        animate: false,
+        concentric: (x) => (ring.has(x.id()) ? -ring.get(x.id()) : 1),
+        levelWidth: () => 1,
+        minNodeSpacing: 22,
+        padding: 40,
+      };
+    }
+  }
+  return {
+    name: "cose",
+    animate: false,
+    randomize: true,
+    nodeRepulsion: () => (n > 150 ? 9000 : 6000),
+    idealEdgeLength: () => (n > 150 ? 50 : 70),
+    nodeOverlap: 8,
+    numIter: n > 400 ? 600 : 1000,
+    padding: 40,
+  };
+}
+
+/// Hand-placed layout for the dependencies (areas) view: force layout knots
+/// that star-of-stars into a hairball. Hubs go evenly on a big ring (like
+/// the devs view), each hub's packages fan on a circle around it sized so
+/// neighbouring fans never touch. Returns false when there are no hubs.
+function applyAreasLayout() {
+  const hubs = cy.nodes("[type = 'area']");
+  if (hubs.length === 0) return false;
+  const tau = Math.PI * 2;
+  const fans = [];
+  hubs.forEach((h) => {
+    const kids = h
+      .outgoers("node")
+      .toArray()
+      .sort((a, b) => String(a.data("label")).localeCompare(String(b.data("label"))));
+    fans.push({ hub: h, kids, pr: 34 + 11 * Math.sqrt(kids.length) });
+  });
+  // Ring circumference sized so adjacent fans stay pr_i + pr_j + gap apart.
+  const R = Math.max(170, (fans.reduce((s, f) => s + 2 * f.pr, 0) / tau) * 1.35);
+  let angle = -Math.PI / 2;
+  fans.forEach((f, i) => {
+    const mid = angle + f.pr / R; // centre of this hub's angular slice
+    angle += (2 * f.pr) / R;
+    const hx = R * Math.cos(mid);
+    const hy = R * Math.sin(mid);
+    f.hub.position({ x: hx, y: hy });
+    const spin = i * 2.4; // stagger fans so neighbours don't line up
+    f.kids.forEach((p, j) => {
+      const pa = mid + spin + (j / Math.max(f.kids.length, 1)) * tau;
+      p.position({
+        x: hx + f.pr * Math.cos(pa),
+        y: hy + f.pr * Math.sin(pa),
+      });
     });
-    fitReasonably();
-    cy.on("tap", "node[type]", (evt) => {
-      if (evt.target.data("type") === "package") showPackage(evt.target.data("id"));
-    });
-  } else {
-    cy.elements().remove();
-    cy.add(elements);
-    cy.layout({ name: "cose", animate: false }).run();
-    fitReasonably();
+  });
+  return true;
+}
+
+/// Fit all elements, but never zoom a small graph into absurdity.
+function fitReasonably() {
+  cy.fit(undefined, 48);
+  if (cy.zoom() > 1.3) {
+    cy.zoom(1.3);
+    cy.center();
   }
 }
 
+function buildGraph(elements) {
+  try {
+    rebuildGraph(elements);
+  } catch (e) {
+    // A cytoscape internal (e.g. a deferred search-filter pass colliding
+    // with the rebuild storm of a fast slider drag) can wedge the instance:
+    // burn it down and start a fresh one rather than leaving a dead canvas
+    // that ignores the slider until the app is restarted.
+    setStatus(`graph glitch, recovered: ${e.message}`, "error");
+    try {
+      cy.destroy();
+    } catch (_) {
+      // already gone
+    }
+    cy = null;
+    rebuildGraph(elements);
+  }
+}
+
+function rebuildGraph(elements) {
+  if (!cy) {
+    cy = cytoscape({
+      container: $("cy"),
+      style: CY_STYLE,
+      wheelSensitivity: 0.25,
+      minZoom: 0.05,
+      maxZoom: 4,
+    });
+    cy.on("tap", "node", (evt) => onNodeTap(evt.target));
+    cy.on("tap", "edge", (evt) => showEdge(evt.target));
+    cy.on("tap", (evt) => {
+      if (evt.target === cy) clearHighlight();
+    });
+  }
+  cy.batch(() => {
+    cy.elements().remove();
+    cy.add(elements);
+  });
+  // Dense canvases only label nodes once you zoom in — but the dependencies
+  // view is hand-placed and spread out, so it always labels.
+  const handPlaced = !queryElements && view === "areas";
+  cy.nodes().toggleClass("dense", !handPlaced && elements.nodes.length > 80);
+  if (elements.nodes.length === 0) return; // nothing to lay out or fit
+  if (!(handPlaced && applyAreasLayout())) {
+    cy.layout(layoutOptions(elements.nodes.length)).run();
+  }
+  fitReasonably();
+  renderLegend();
+  const empty = $("empty-state");
+  empty.hidden = elements.nodes.length > 0;
+  if (!empty.hidden) {
+    empty.innerHTML = queryElements
+      ? "<div><b>No graph values</b>The query returned rows but no nodes.</div>"
+      : "<div><b>No dependencies</b>Nothing was declared at this point in time.</div>";
+  }
+}
+
+function highlight(node) {
+  const hood = node.closedNeighborhood();
+  cy.batch(() => {
+    cy.elements().addClass("faded").removeClass("hl");
+    hood.removeClass("faded");
+    node.connectedEdges().addClass("hl");
+  });
+}
+
+function clearHighlight() {
+  if (!cy) return;
+  cy.elements().removeClass("faded hl");
+}
+
+function renderLegend() {
+  const legend = $("legend");
+  if (!cy) return;
+  const items = new Map();
+  cy.nodes().forEach((n) => {
+    const kind = n.data("kind");
+    const type = n.data("type");
+    let key, label, color, cls = "";
+    if (type === "dev") { key = "dev"; label = "Developer"; color = "#4c8dff"; cls = "sq"; }
+    else if (type === "area") { key = "area"; label = "Repo area"; color = "#a371f7"; cls = "sq"; }
+    else if (kind && KIND_STYLES[kind]) {
+      key = kind; label = kind; color = KIND_STYLES[kind].color; cls = KIND_STYLES[kind].legend;
+    } else if (!kind || kind === "Package") {
+      const eco = n.data("ecosystem");
+      if (!eco) { if (kind) { key = "Package"; label = "Package"; color = ECOSYSTEM_COLORS.generic; } else return; }
+      else { key = "eco:" + eco; label = eco; color = ECOSYSTEM_COLORS[eco] || ECOSYSTEM_COLORS.generic; }
+    } else {
+      key = kind; label = kind; color = ECOSYSTEM_COLORS.generic;
+    }
+    if (key && !items.has(key)) items.set(key, { label, color, cls, count: 0 });
+    if (key) items.get(key).count++;
+  });
+  legend.innerHTML = [...items.values()]
+    .map((i) => `<span><i class="${i.cls}" style="background:${i.color}"></i>${escapeHtml(i.label)} <b class="muted">${i.count}</b></span>`)
+    .join("");
+}
+
+function onNodeTap(node) {
+  highlight(node);
+  const d = node.data();
+  if (d.type === "package") return showPackage(d.id);
+  if (d.kind === "Package" && d.purl) return showPackage(d.purl);
+  if (d.type === "dev") return showGroupDeps("Developer", d.label, node);
+  if (d.type === "area") return showGroupDeps("Repo area", d.label, node);
+  showProps(d.kind || "Node", d.label, d.props || {});
+}
+
+// ---------------------------------------------------------------- render
+
+/// Bumped on every refresh; a slower in-flight refresh whose slider position
+/// has been superseded drops its render instead of painting a stale frame
+/// (and racing the newer rebuild into cytoscape internals).
+let renderSeq = 0;
+
 async function refresh() {
+  const seq = ++renderSeq;
   const asOf = asOfValue();
   setAsOfLabel(asOf);
   const q = asOf ? `?as_of=${encodeURIComponent(asOf)}` : "";
   try {
     const payload = await fetchJson(`/api/graph${q}`);
+    if (seq !== renderSeq) return; // a newer refresh is already in charge
     lastElements = payload.elements;
-    // Auto-decide once: big graphs start direct-only.
     if (showTransitive === null) {
       showTransitive = lastElements.nodes.length <= DIRECT_ONLY_THRESHOLD;
     }
     updateScopeToggle();
-    renderCurrentView();
+    // A query that reads $as_of follows the slider; any other query result
+    // stays put until dismissed.
+    if (queryElements && lastCypher && lastCypher.includes("$as_of")) {
+      await runCypher({ silentFocus: true });
+    } else {
+      renderCurrentView();
+    }
     if (selectedPackage) showPackage(selectedPackage, asOf);
   } catch (e) {
-    document.getElementById("asof-label").textContent = `error: ${e.message}`;
+    if (seq === renderSeq) setStatus(`error: ${e.message}`, "error");
   }
 }
 
 /// The main canvas shows the active view — or, while one is active, the raw
 /// query result.
 function renderCurrentView() {
+  const viewsEl = $("views");
+  viewsEl.classList.toggle("dimmed", !!queryElements);
   if (queryElements) {
     buildGraph(queryElements);
     return;
   }
-  buildGraph(buildViewElements(visibleElements(lastElements)));
+  if (lastElements) buildGraph(buildViewElements(visibleElements(lastElements)));
 }
 
 function clearQueryResult() {
   queryElements = null;
-  document.getElementById("clear-query").hidden = true;
+  lastCypher = null;
+  $("query-pill").hidden = true;
   renderCurrentView();
 }
 
 function updateScopeToggle() {
-  const box = document.getElementById("scope-toggle");
-  const label = document.getElementById("scope-label");
+  const box = $("scope-toggle");
+  const label = $("scope-label");
   if (!box || !lastElements) return;
   const total = lastElements.nodes.length;
   const direct = lastElements.nodes.filter((n) => n.data.scope === "direct").length;
   box.checked = showTransitive;
-  label.textContent = showTransitive
-    ? `direct + transitive (${total})`
-    : `direct only (${direct})`;
+  label.textContent = showTransitive ? `Direct + transitive (${total})` : `Direct only (${direct})`;
 }
 
 function toggleScope() {
-  showTransitive = document.getElementById("scope-toggle").checked;
+  showTransitive = $("scope-toggle").checked;
   updateScopeToggle();
-  renderCurrentView();
+  if (queryElements) clearQueryResult();
+  else renderCurrentView();
+}
+
+function setView(newView) {
+  view = newView;
+  for (const btn of document.querySelectorAll("[data-view]")) {
+    btn.classList.toggle("active", btn.dataset.view === view);
+  }
+  if (queryElements) clearQueryResult();
+  else renderCurrentView();
+}
+
+// ---------------------------------------------------------------- inspector
+
+function setInspectorTitle(t) {
+  $("inspector-title").textContent = t;
 }
 
 async function showPackage(purl, asOfOverride) {
   selectedPackage = purl;
-  const details = document.getElementById("pkg-details");
-  details.innerHTML = "<em>loading…</em>";
+  setInspectorTitle("Package");
+  const details = $("pkg-details");
+  details.innerHTML = `<p class="hint">Loading…</p>`;
   const asOf = asOfOverride ?? asOfValue();
   const suffix = asOf ? `&as_of=${encodeURIComponent(asOf)}` : "";
   try {
@@ -303,31 +537,100 @@ async function showPackage(purl, asOfOverride) {
       fetchJson(`/api/history?name=${encodeURIComponent(purl)}${suffix}`),
       fetchJson(`/api/usage?purl=${encodeURIComponent(purl)}`),
     ]);
+    if (selectedPackage !== purl) return; // a newer click won
     const rows = history.rows || [];
     const current = rows.filter((r) => !r.removed_date);
     const latest = current[current.length - 1] || rows[rows.length - 1] || {};
-    const usages = (usage.rows || []);
+    const usages = usage.rows || [];
+    const name = decodeURIComponent(purl.replace(/^pkg:[^/]+\//, "").replace(/@[^@/]*$/, ""));
+    const purlType = (purl.match(/^pkg:([^/]+)\//) || [])[1];
+    const eco = { pypi: "python", maven: "java", cargo: "rust", golang: "go", npm: "node" }[purlType] || purlType;
 
     const timeline = rows
-      .map(
-        (r) =>
-          `<li><code>${r.version || r.requirement || "?"}</code> — added ${fmtDate(r.added_date)} by ${escapeHtml(r.added_by_name || "?")}` +
-          (r.removed_date ? ` · removed ${fmtDate(r.removed_date)}` : " · <strong>live</strong>") +
-          `</li>`
-      )
+      .map((r) => {
+        const live = !r.removed_date;
+        return `<li class="${live ? "live" : ""}"><code>${escapeHtml(r.version || r.requirement || "?")}</code>
+          ${live ? '<span class="tag live">live</span>' : '<span class="tag removed">removed</span>'}<br>
+          <span class="when">added ${fmtDate(r.added_date)} by ${escapeHtml(r.added_by_name || "?")}` +
+          (r.removed_date ? ` · removed ${fmtDate(r.removed_date)}` : "") + `</span></li>`;
+      })
       .join("");
 
     details.innerHTML = `
-      <dt>purl</dt><dd>${escapeHtml(purl)}</dd>
-      <dt>requirement</dt><dd>${escapeHtml(latest.requirement || "?")} in ${escapeHtml(latest.manifest || "?")}</dd>
-      <dt>added by</dt><dd>${escapeHtml(latest.added_by_name || "?")} (${escapeHtml(latest.added_by_email || "?")}) · ${fmtDate(latest.added_date)}</dd>
-      <dt>version timeline</dt><dd><ul>${timeline}</ul></dd>
-      <dt>used in ${usages.length} file${usages.length === 1 ? "" : "s"}</dt>
-      <dd><ul>${usages.map((u) => `<li><code>${escapeHtml(u.file)}</code> <em>${escapeHtml(u.symbol)}</em></li>`).join("") || "<em>no usage sites found</em>"}</ul></dd>
-    `;
+      <p class="insp-title">${escapeHtml(name)}</p>
+      <div class="insp-sub">
+        ${eco ? `<span class="badge"><span class="swatch" style="background:${ECOSYSTEM_COLORS[eco] || ECOSYSTEM_COLORS.generic}"></span>${escapeHtml(eco)}</span>` : ""}
+        ${current.length ? '<span class="badge">in use</span>' : '<span class="badge">not declared</span>'}
+      </div>
+      <dl>
+        <dt>Package URL</dt><dd class="mono">${escapeHtml(purl)}</dd>
+        <dt>Requirement</dt><dd><code>${escapeHtml(latest.requirement || "?")}</code> in <code>${escapeHtml(latest.manifest || "?")}</code></dd>
+        <dt>Added by</dt><dd>${escapeHtml(latest.added_by_name || "?")} <span class="muted">${escapeHtml(latest.added_by_email || "")}</span><br><span class="muted">${fmtDate(latest.added_date)}</span></dd>
+        <dt>Version timeline</dt><dd><ul class="timeline">${timeline || "<li>no history</li>"}</ul></dd>
+        <dt>Used in ${usages.length} file${usages.length === 1 ? "" : "s"}</dt>
+        <dd><ul class="files">${usages.map((u) => `<li><code>${escapeHtml(u.file)}</code><em>${escapeHtml(u.symbol)}</em></li>`).join("") || '<li class="muted">No usage sites found</li>'}</ul></dd>
+      </dl>`;
   } catch (e) {
-    details.innerHTML = `<em>${escapeHtml(e.message)}</em>`;
+    details.innerHTML = `<p class="hint">${escapeHtml(e.message)}</p>`;
   }
+}
+
+/// A group hub selected on the canvas (developer or repo area): list the
+/// packages attributed to it, each clickable into the full package panel.
+function showGroupDeps(kind, label, node) {
+  selectedPackage = null;
+  setInspectorTitle(kind);
+  const kids = node
+    .outgoers("node")
+    .toArray()
+    .sort((a, b) => String(a.data("label")).localeCompare(String(b.data("label"))));
+  const items = kids
+    .map((k) => {
+      const d = k.data();
+      const swatch = ECOSYSTEM_COLORS[d.ecosystem] || ECOSYSTEM_COLORS.generic;
+      return `<li><a data-purl="${escapeHtml(d.id)}" href="#"><i class="swatch" style="background:${swatch}"></i>${escapeHtml(d.label)}</a></li>`;
+    })
+    .join("");
+  const what = kind === "Developer" ? "added" : "declared here";
+  $("pkg-details").innerHTML = `
+    <p class="insp-title">${escapeHtml(label)}</p>
+    <p class="hint">${kids.length} package${kids.length === 1 ? "" : "s"} ${what}${asOfValue() ? " as of this date" : ""}. Click one for its history.</p>
+    <ul class="dep-list">${items}</ul>`;
+  for (const a of $("pkg-details").querySelectorAll("a[data-purl]")) {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      showPackage(a.dataset.purl);
+    });
+  }
+}
+
+function propsTable(props) {
+  const keys = Object.keys(props).sort();
+  if (!keys.length) return '<p class="hint">No properties.</p>';
+  return `<table class="props">${keys
+    .map((k) => `<tr><td>${escapeHtml(k)}</td><td>${formatCell(props[k]).html}</td></tr>`)
+    .join("")}</table>`;
+}
+
+function showProps(kind, label, props) {
+  selectedPackage = null;
+  setInspectorTitle(kind);
+  $("pkg-details").innerHTML = `
+    <p class="insp-title">${escapeHtml(label)}</p>
+    <div class="insp-sub"><span class="badge">${escapeHtml(kind)}</span></div>
+    ${propsTable(props)}`;
+}
+
+function showEdge(edge) {
+  const d = edge.data();
+  clearHighlight();
+  edge.addClass("hl");
+  selectedPackage = null;
+  setInspectorTitle("Relationship");
+  $("pkg-details").innerHTML = `
+    <p class="insp-title">${escapeHtml(d.label || "edge")}</p>
+    <p class="hint">${escapeHtml(edge.source().data("label"))} → ${escapeHtml(edge.target().data("label"))}</p>
+    ${d.props ? propsTable(d.props) : ""}`;
 }
 
 function fmtDate(iso) {
@@ -335,75 +638,113 @@ function fmtDate(iso) {
 }
 
 function escapeHtml(s) {
-  const div = document.createElement("div");
-  div.textContent = String(s);
-  return div.innerHTML;
+  return String(s ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
+
+// ---------------------------------------------------------------- init
 
 async function init() {
   const meta = await fetchJson("/api/meta");
   const badges = (meta.ecosystems || [])
-    .map((e) => `<span class="badge">${e.ecosystem}: ${e.names} deps</span>`)
+    .map((e) => `<span class="badge"><span class="swatch" style="background:${ECOSYSTEM_COLORS[e.ecosystem] || ECOSYSTEM_COLORS.generic}"></span>${escapeHtml(e.ecosystem)} · ${e.names}</span>`)
     .join("");
-  document.getElementById("title").textContent = `${meta.name} — BOMvoyage`;
-  document.getElementById("meta").innerHTML =
-    `${meta.total_packages} package versions · last scanned ${fmtDate(meta.last_scanned_at)} ` +
-    `· resolution: <strong>${meta.scan_quality}</strong> ${badges}`;
+  const project = meta.name && meta.name !== "." ? meta.name : null;
+  if (project) {
+    $("project").textContent = project;
+    $("project").hidden = false;
+    document.title = `${project} · BOMvoyage`;
+  }
+  $("meta").innerHTML =
+    `<span><strong>${meta.total_packages}</strong> package versions</span><span class="sep">·</span>` +
+    `<span>scanned ${fmtDate(meta.last_scanned_at)}</span><span class="sep">·</span>` +
+    `<span>resolution <strong>${escapeHtml(meta.scan_quality)}</strong></span>${badges}`;
 
   const commitPayload = await fetchJson("/api/commits");
-  commits = commitPayload.rows || []; // ascending by date
-  days = [...new Set(commits.map((c) => c.date.slice(0, 10)))]; // one tick per DAY
-  const slider = document.getElementById("slider");
-  slider.max = days.length; // past the last day = HEAD
-  slider.value = slider.max;
+  setCommits(commitPayload.rows || []);
+  const slider = $("slider");
   slider.addEventListener("input", () => {
-    selectedDate = null;
+    pauseForManualNav();
     refresh();
   });
   wireCalendar();
-  document.getElementById("reset-btn").addEventListener("click", () => {
-    selectedDate = null;
+  $("reset-btn").addEventListener("click", () => {
+    pauseForManualNav();
     slider.value = slider.max;
     refresh();
   });
-  document.getElementById("run-cypher").addEventListener("click", runCypher);
-  document.getElementById("scope-toggle").addEventListener("change", toggleScope);
-  document.getElementById("clear-query").addEventListener("click", clearQueryResult);
+  $("play-btn").addEventListener("click", () => startPlay());
+  $("pause-btn").addEventListener("click", pausePlay);
+  $("rewind-btn").addEventListener("click", rewindPlay);
+  $("scope-toggle").addEventListener("change", toggleScope);
+  $("clear-query").addEventListener("click", clearQueryResult);
   for (const btn of document.querySelectorAll("[data-view]")) {
     btn.addEventListener("click", () => setView(btn.dataset.view));
   }
-  wireCypherPresets();
+  wireCanvasControls();
+  wireCypherConsole();
 
   await refresh();
-
-  // The current SBOM is already on screen; poll until the background history
-  // walk completes, then light up time travel.
   pollHistoryStatus(meta.history_current);
+  // The default experience: the sweep starts itself on load, oldest day
+  // first, and loops until the user pauses.
+  updatePlayButtons();
+  if (days.length > 0) {
+    $("slider").value = 0;
+    startPlay();
+  }
+}
+
+function setCommits(rows) {
+  commits = rows; // ascending by date
+  days = [...new Set(commits.map((c) => c.date.slice(0, 10)))]; // one tick per DAY
+  const slider = $("slider");
+  slider.max = days.length; // past the last day = HEAD
+  // A late history load (background scan finishing) rewinds a running sweep
+  // to the oldest day and restarts it over the full timeline: the pending
+  // step was scheduled against the old (provisional) day count, so without
+  // this the sweep sits frozen on day 0 until that stale timer fires.
+  if (playing) {
+    slider.value = 0;
+    startPlay();
+  } else {
+    slider.value = slider.max;
+  }
+  updatePlayButtons();
+}
+
+function wireCanvasControls() {
+  $("zoom-in").addEventListener("click", () => cy && cy.zoom({ level: cy.zoom() * 1.25, renderedPosition: center() }));
+  $("zoom-out").addEventListener("click", () => cy && cy.zoom({ level: cy.zoom() / 1.25, renderedPosition: center() }));
+  $("zoom-fit").addEventListener("click", () => cy && fitReasonably());
+  $("relayout").addEventListener("click", () => {
+    if (!cy) return;
+    if (!applyAreasLayout()) {
+      cy.layout(layoutOptions(cy.nodes().length)).run();
+    }
+    fitReasonably();
+  });
+  function center() {
+    const r = $("cy").getBoundingClientRect();
+    return { x: r.width / 2, y: r.height / 2 };
+  }
 }
 
 function pollHistoryStatus(current) {
-  if (current) {
-    document.getElementById("meta").dataset.history = "ready";
-    return;
-  }
+  if (current) return;
   const badge = document.createElement("span");
-  badge.className = "badge";
-  badge.id = "history-badge";
-  badge.textContent = "history loading… time travel not ready yet";
-  document.getElementById("meta").appendChild(badge);
+  badge.className = "badge pulse";
+  badge.textContent = "loading history — time travel soon";
+  $("meta").appendChild(badge);
   const timer = setInterval(async () => {
     try {
       const meta = await fetchJson("/api/meta");
       if (meta.history_current) {
         clearInterval(timer);
-        badge.textContent = "time travel ready";
         badge.remove();
         const commitPayload = await fetchJson("/api/commits");
-        commits = commitPayload.rows || [];
-        days = [...new Set(commits.map((c) => c.date.slice(0, 10)))];
-        const slider = document.getElementById("slider");
-        slider.max = days.length;
-        slider.value = slider.max;
+        setCommits(commitPayload.rows || []);
         refresh();
       }
     } catch (_) {
@@ -419,8 +760,8 @@ const MONTHS = ["January", "February", "March", "April", "May", "June",
 const DOW = ["S", "M", "T", "W", "T", "F", "S"];
 
 function wireCalendar() {
-  const btn = document.getElementById("datebtn");
-  const cal = document.getElementById("calendar");
+  const btn = $("datebtn");
+  const cal = $("calendar");
   const latest = commits.length ? commits[commits.length - 1].date.slice(0, 10) : null;
   calMonth = latest ? new Date(latest + "T12:00:00Z") : new Date();
   btn.addEventListener("click", (e) => {
@@ -433,7 +774,7 @@ function wireCalendar() {
 }
 
 function renderCalendar() {
-  const cal = document.getElementById("calendar");
+  const cal = $("calendar");
   if (cal.hidden) return;
   const y = calMonth.getUTCFullYear();
   const m = calMonth.getUTCMonth();
@@ -441,9 +782,9 @@ function renderCalendar() {
   const checkpoints = new Set(days);
 
   let html = `<div id="cal-head">
-    <button type="button" id="cal-prev">‹</button>
+    <button type="button" id="cal-prev" aria-label="Previous month">‹</button>
     <span>${MONTHS[m]} ${y}</span>
-    <button type="button" id="cal-next">›</button>
+    <button type="button" id="cal-next" aria-label="Next month">›</button>
   </div><div id="cal-grid">`;
   for (const d of DOW) html += `<div class="cal-dow">${d}</div>`;
   const first = new Date(Date.UTC(y, m, 1)).getUTCDay();
@@ -451,19 +792,17 @@ function renderCalendar() {
   for (let i = 0; i < first; i++) html += `<div class="cal-day blank"></div>`;
   for (let d = 1; d <= nDays; d++) {
     const dateStr = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    const isCheckpoint = checkpoints.has(dateStr);
-    const isSelected = asOfDate === dateStr;
-    const classes = ["cal-day", isCheckpoint ? "checkpoint" : "", isSelected ? "selected" : ""]
+    const classes = ["cal-day", checkpoints.has(dateStr) ? "checkpoint" : "", asOfDate === dateStr ? "selected" : ""]
       .filter(Boolean).join(" ");
     html += `<div class="${classes}" data-date="${dateStr}" title="${dayCommitCount(dateStr)} commits">${d}</div>`;
   }
-  html += `</div><div id="cal-legend"><span class="dot"></span> day with git checkpoints — click a day to time travel</div>`;
+  html += `</div><div id="cal-legend"><span class="dot"></span> day with git checkpoints — click any day to time travel</div>`;
   cal.innerHTML = html;
-  document.getElementById("cal-prev").addEventListener("click", () => {
+  $("cal-prev").addEventListener("click", () => {
     calMonth = new Date(Date.UTC(y, m - 1, 1));
     renderCalendar();
   });
-  document.getElementById("cal-next").addEventListener("click", () => {
+  $("cal-next").addEventListener("click", () => {
     calMonth = new Date(Date.UTC(y, m + 1, 1));
     renderCalendar();
   });
@@ -477,102 +816,285 @@ function dayCommitCount(dateStr) {
 }
 
 function pickDay(dateStr) {
+  pauseForManualNav();
   selectedDate = dateStr;
   const idx = days.indexOf(dateStr);
-  const slider = document.getElementById("slider");
-  if (idx >= 0) {
-    slider.value = idx;
-  } else if (days.length && dateStr > days[days.length - 1]) {
-    slider.value = slider.max; // after the last checkpoint
-  } else {
-    slider.value = 0; // before the first checkpoint
-  }
+  const slider = $("slider");
+  if (idx >= 0) slider.value = idx;
+  else if (days.length && dateStr > days[days.length - 1]) slider.value = slider.max;
+  else slider.value = 0;
   refresh();
 }
 
-function markCalendarSelection(day) {
-  if (document.getElementById("calendar").hidden) return;
+function markCalendarSelection() {
+  if ($("calendar").hidden) return;
   renderCalendar();
 }
 
+// ---------------------------------------------------------------- playback
+
+/// The autoplay sweep — the tool's point in one glance. It walks the slider
+/// one DAY at a time from the oldest commit to HEAD, the whole sweep ~30s
+/// however many days there are, holds on the newest for 5s, then loops,
+/// until paused. Each step waits for the graph to finish rendering, so a
+/// slow backend stretches the sweep instead of piling up requests.
+const PLAY_SWEEP_MS = 30000;
+const PLAY_HOLD_MS = 5000;
+
+function updatePlayButtons() {
+  const hasDays = days.length > 0;
+  $("rewind-btn").disabled = !hasDays;
+  $("play-btn").disabled = !hasDays || playing;
+  $("pause-btn").disabled = !hasDays || !playing;
+  $("play-controls").classList.toggle("playing", playing);
+}
+
+function pausePlay() {
+  if (!playing) return;
+  playing = false;
+  clearTimeout(playTimer);
+  playTimer = null;
+  updatePlayButtons();
+}
+
+/// Manual navigation is an implicit pause: the sweep must never fight the
+/// slider or calendar for the as-of value.
+function pauseForManualNav() {
+  pausePlay();
+  selectedDate = null;
+}
+
+function rewindPlay() {
+  pausePlay();
+  $("slider").value = 0;
+  refresh();
+}
+
+/// Resume (or begin) the sweep from wherever the slider sits.
+function startPlay() {
+  clearTimeout(playTimer);
+  playing = true;
+  selectedDate = null;
+  updatePlayButtons();
+  const step = async () => {
+    const t0 = performance.now();
+    await refresh();
+    if (!playing) return;
+    const slider = $("slider");
+    const atEnd = Number(slider.value) >= days.length; // HEAD
+    // ~30s for a full sweep, but never more than 2.5s parked on one day —
+    // the provisional timeline (one day) would otherwise sit frozen for
+    // the whole sweep budget.
+    const interval = Math.min(2500, Math.max(120, PLAY_SWEEP_MS / Math.max(days.length, 1)));
+    const wait = Math.max(0, interval - (performance.now() - t0));
+    playTimer = setTimeout(() => {
+      if (!playing) return;
+      slider.value = atEnd ? 0 : Number(slider.value) + 1;
+      step();
+    }, atEnd ? PLAY_HOLD_MS : wait);
+  };
+  step();
+}
+
+// ---------------------------------------------------------------- cypher
+
+/// Presets are graph-shaped (drawn on the canvas) unless marked `table`.
 const CYPHER_PRESETS = [
   {
-    name: "most-used packages",
-    cypher:
-      "MATCH (f:File)-[r:IMPORTS]->(p:Package)\nRETURN p.name AS package, count(DISTINCT f) AS files\nORDER BY files DESC LIMIT 10",
+    name: "Who added what",
+    cypher: "MATCH p=(x:Person)-[:ADDED]->(:Package)\nRETURN p LIMIT 200",
   },
   {
-    name: "who added the most",
+    name: "Live dependencies (as of slider)",
     cypher:
-      "MATCH (x:Person)-[r:ADDED]->(p:Package)\nRETURN x.name AS developer, count(DISTINCT p) AS added\nORDER BY added DESC LIMIT 10",
+      "MATCH p=(m:Manifest)-[r:DECLARES]->(:Package)\nWHERE r.since_date <= $as_of\n  AND (r.removed_date IS NULL OR r.removed_date > $as_of)\nRETURN p LIMIT 300",
   },
   {
-    name: "recently added",
-    cypher:
-      "MATCH (m:Manifest)-[r:DECLARES]->(p:Package)\nWHERE r.removed_date IS NULL\nRETURN p.purl AS purl, r.since_date AS added, r.added_by_name AS by\nORDER BY r.since_date DESC LIMIT 10",
+    name: "Dependency tree",
+    cypher: "MATCH p=(:Package)-[:DEPENDS_ON]->(:Package)\nRETURN p LIMIT 300",
   },
   {
-    name: "duplicate versions",
+    name: "Most-imported packages",
+    cypher:
+      "MATCH (f:File)-[:IMPORTS]->(p:Package)\nWITH p, count(DISTINCT f) AS files\nORDER BY files DESC LIMIT 5\nMATCH path=(:File)-[:IMPORTS]->(p)\nRETURN path",
+  },
+  {
+    name: "Removed dependencies",
+    cypher: "MATCH p=(x:Person)-[:REMOVED]->(:Package)\nRETURN p LIMIT 200",
+  },
+  {
+    name: "Commits touching manifests",
+    cypher: "MATCH p=(c:Commit)-[:TOUCHED]->(:Manifest)\nRETURN p LIMIT 200",
+  },
+  {
+    name: "Top contributors",
+    table: true,
+    cypher:
+      "MATCH (x:Person)-[:ADDED]->(p:Package)\nRETURN x.name AS developer, count(DISTINCT p) AS added\nORDER BY added DESC LIMIT 10",
+  },
+  {
+    name: "Duplicate versions",
+    table: true,
     cypher:
       "MATCH (p:Package)\nWITH p.name AS name, count(*) AS versions, collect(p.version) AS vs\nWHERE versions > 1\nRETURN name, versions, vs ORDER BY versions DESC",
   },
-  {
-    name: "removed dependencies",
-    cypher:
-      "MATCH (m:Manifest)-[r:DECLARES]->(p:Package)\nWHERE r.removed_date IS NOT NULL\nRETURN DISTINCT p.purl AS purl, r.removed_date AS removed, r.added_by_name AS added_by\nORDER BY removed DESC LIMIT 10",
-  },
 ];
 
-function wireCypherPresets() {
-  const holder = document.getElementById("cypher-presets");
+function wireCypherConsole() {
+  const holder = $("cypher-presets");
   for (const preset of CYPHER_PRESETS) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = preset.name;
+    btn.title = preset.table ? "Table result" : "Draws on the canvas";
+    btn.innerHTML = `<i class="${preset.table ? "tbl" : ""}"></i>${escapeHtml(preset.name)}`;
     btn.addEventListener("click", () => {
-      document.getElementById("cypher-input").value = preset.cypher;
+      $("cypher-input").value = preset.cypher;
       runCypher();
     });
     holder.appendChild(btn);
   }
-}
+  $("run-cypher").addEventListener("click", () => runCypher());
+  $("cypher-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      runCypher();
+    }
+  });
+  $("cypher-input").value = CYPHER_PRESETS[0].cypher;
 
-function setView(newView) {
-  view = newView;
-  queryElements = null;
-  document.getElementById("clear-query").hidden = true;
-  for (const btn of document.querySelectorAll("[data-view]")) {
-    btn.classList.toggle("active", btn.dataset.view === view);
+  const box = $("cypher-box");
+  $("cypher-toggle").addEventListener("click", () => {
+    box.classList.toggle("collapsed");
+    if (!box.classList.contains("collapsed")) $("cypher-input").focus();
+    requestAnimationFrame(() => cy && cy.resize());
+  });
+
+  for (const tab of document.querySelectorAll("#cypher-results [data-tab]")) {
+    tab.addEventListener("click", () => {
+      for (const t of document.querySelectorAll("#cypher-results [data-tab]")) {
+        t.classList.toggle("active", t === tab);
+      }
+      $("cypher-table").hidden = tab.dataset.tab !== "table";
+      $("cypher-output").hidden = tab.dataset.tab !== "json";
+    });
   }
-  renderCurrentView();
+
+  // Drag the top edge to resize the console.
+  const handle = $("cypher-resize");
+  handle.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = box.getBoundingClientRect().height;
+    const move = (ev) => {
+      const h = Math.min(window.innerHeight * 0.7, Math.max(140, startH + (startY - ev.clientY)));
+      box.style.height = `${h}px`;
+      cy && cy.resize();
+    };
+    const up = () => {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      cy && cy.resize();
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
 }
 
-async function runCypher() {
-  const cypherInput = document.getElementById("cypher-input").value;
-  const out = document.getElementById("cypher-output");
-  out.textContent = "running…";
+function setStatus(text, cls) {
+  const s = $("cypher-status");
+  s.textContent = text;
+  s.className = "muted " + (cls || "");
+}
+
+async function runCypher(opts = {}) {
+  const cypher = opts.silentFocus && lastCypher ? lastCypher : $("cypher-input").value.trim();
+  if (!cypher) return;
+  const box = $("cypher-box");
+  if (box.classList.contains("collapsed") && !opts.silentFocus) {
+    box.classList.remove("collapsed");
+    requestAnimationFrame(() => cy && cy.resize());
+  }
+  const runBtn = $("run-cypher");
+  runBtn.disabled = true;
+  setStatus("Running…");
+  const started = performance.now();
   try {
+    const body = { cypher };
+    if (cypher.includes("$as_of")) body.params = { as_of: asOfValue() || STALE_AS_OF };
     const res = await fetchJson("/api/query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cypher: cypherInput }),
+      body: JSON.stringify(body),
     });
+    const ms = Math.round(performance.now() - started);
+    const rows = res.rows || [];
+    renderResultTable(res.columns || Object.keys(rows[0] || {}), rows);
+    $("cypher-output").textContent = JSON.stringify(rows, null, 2).slice(0, 200000);
+
     const elements = res.elements;
+    const rowsText = `${rows.length} row${rows.length === 1 ? "" : "s"} · ${ms} ms`;
     if (elements && elements.nodes.length > 0) {
       // Graph-shaped result: take over the main canvas.
       queryElements = elements;
-      const clearBtn = document.getElementById("clear-query");
-      clearBtn.hidden = false;
-      clearBtn.textContent =
-        `clear query result (${elements.nodes.length} nodes, ${elements.edges.length} edges)`;
+      lastCypher = cypher;
+      $("query-pill").hidden = false;
+      $("query-pill-text").textContent =
+        `Query result · ${elements.nodes.length} nodes · ${elements.edges.length} relationships` +
+        (cypher.includes("$as_of") ? ` · as of ${asOfValue() ? asOfValue().slice(0, 10) : "HEAD"}` : "");
       renderCurrentView();
+      setStatus(`Drawn on canvas — ${elements.nodes.length} nodes, ${elements.edges.length} relationships · ${rowsText}`, "ok");
+    } else {
+      setStatus(`${rowsText} · no nodes to draw (return nodes, relationships or paths to see them on the canvas)`);
     }
-    out.textContent = JSON.stringify(res.rows ?? res, null, 2).slice(0, 20000);
   } catch (e) {
-    out.textContent = `error: ${e.message}`;
+    setStatus(`Error: ${e.message}`, "error");
+    $("cypher-table").innerHTML = `<p class="hint" style="color:var(--danger)">${escapeHtml(e.message)}</p>`;
+    $("cypher-output").textContent = e.message;
+  } finally {
+    runBtn.disabled = false;
   }
 }
 
+/// One cell of the result table: entities show as `(:Label {name})`.
+function formatCell(v) {
+  if (v === null || v === undefined) return { html: "null", cls: "null" };
+  if (typeof v === "number") return { html: String(v), cls: "num" };
+  if (typeof v === "boolean") return { html: String(v), cls: "num" };
+  if (typeof v === "string") return { html: escapeHtml(v), cls: "" };
+  if (Array.isArray(v)) {
+    const inner = v.slice(0, 20).map((x) => formatCell(x).html).join(", ");
+    return { html: `[${inner}${v.length > 20 ? ", …" : ""}]`, cls: "" };
+  }
+  if (v._labels) {
+    const name = v.name || v.purl || v.path || v.email || v.sha || "";
+    return { html: `<span class="ent">(:${escapeHtml(v._labels.join(":"))})</span> ${escapeHtml(name)}`, cls: "" };
+  }
+  if (v._type) return { html: `<span class="ent">[:${escapeHtml(v._type)}]</span>`, cls: "" };
+  if (v._path_length !== undefined) {
+    const names = (v.nodes || []).map((n) => escapeHtml(n.name || n.purl || n.path || n.email || "?"));
+    return { html: `<span class="ent">path</span> ${names.join(" → ")}`, cls: "" };
+  }
+  return { html: escapeHtml(JSON.stringify(v)), cls: "" };
+}
+
+function renderResultTable(columns, rows) {
+  const holder = $("cypher-table");
+  if (!rows.length) {
+    holder.innerHTML = '<p class="hint">No rows.</p>';
+    return;
+  }
+  const cap = 500;
+  const head = columns.map((c) => `<th>${escapeHtml(c)}</th>`).join("");
+  const body = rows.slice(0, cap).map((r) =>
+    "<tr>" + columns.map((c) => {
+      const f = formatCell(r[c]);
+      return `<td class="${f.cls}" title="${escapeHtml(typeof r[c] === "string" ? r[c] : "")}">${f.html}</td>`;
+    }).join("") + "</tr>"
+  ).join("");
+  holder.innerHTML = `<table class="rtable"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>` +
+    (rows.length > cap ? `<p class="hint">Showing first ${cap} of ${rows.length} rows.</p>` : "");
+}
+
 init().catch((e) => {
-  document.getElementById("meta").textContent = `failed to load: ${e.message}`;
+  $("meta").textContent = `failed to load: ${e.message}`;
 });
