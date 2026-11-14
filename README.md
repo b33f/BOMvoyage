@@ -52,6 +52,25 @@ file that uses it**; click a developer or repo-area hub to list the dependencies
 attributed to it. The raw-Cypher box at the bottom shows the temporal query behind
 the view you're looking at.
 
+All screenshots below are real BOMvoyage sessions over the
+[neo4j-java-driver](https://github.com/neo4j/neo4j-java-driver) repository
+(388 package versions across 204 commits).
+
+**The Developers view** — who added what, at `2023-10-05` mid-playback. Developer
+hubs fan out to the packages they touched; the slider is mid-sweep:
+
+![Developers view — the Neo4j Java driver's dependency history, mid-playback](docs/screenshots/developers.png)
+
+**The Dependencies view** — the `driver` Maven module selected, its declared
+packages highlighted and listed in the inspector:
+
+![Dependencies view — the driver module's declared packages](docs/screenshots/dependencies.png)
+
+**A package's story** — `org.slf4j:slf4j-api` as of `2021-08-18`: who added it and
+when, its version timeline, and where it's used:
+
+![Package inspector — slf4j-api's version timeline](docs/screenshots/package-inspector.png)
+
 ## Why a graph, and why embedded
 
 A software bill of materials is a graph: manifests declare dependencies, lockfiles
