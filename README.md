@@ -140,6 +140,11 @@ $ bomvoyage query --db bomvoyage.rl "MATCH (m:Manifest)-[r:DECLARES]->(p:Package
 
 You need Rust (1.88+) via [rustup](https://rustup.rs/), and `git` on your PATH.
 
+> Cutting a release, or touching the CI / dependency graph? Read
+> [RELEASING.md](RELEASING.md) first — it documents the release checklist
+> (including the version bump in `Cargo.toml` that tags alone don't do) and
+> the cross-compile setup for the Intel-Mac artifact.
+
 **macOS** — the simplest path is the official script (it installs to
 `~/.cargo/bin` and adds it to your shell's PATH for you):
 
@@ -232,9 +237,12 @@ $ cargo test                 # parser fixtures, interval replay, end-to-end git
 ```
 
 CI builds and tests every commit on **Linux, macOS and Windows** and runs the
-lint checks (`cargo fmt`, `cargo clippy -D warnings`); a push of a `v*` tag
-(e.g. `v0.1.0`) builds release binaries for all four targets and publishes them
-as a GitHub release with SHA-256 checksums.
+lint checks (`cargo fmt`, `cargo clippy -D warnings`) plus a `cargo-deny`
+supply-chain gate; a push of a `v*` tag
+(e.g. `v0.1.0`) builds release binaries for all five targets and publishes them
+as a GitHub release with SHA-256 checksums and signed build-provenance
+attestations. The release process is documented in
+[RELEASING.md](RELEASING.md).
 
 ## Security
 
