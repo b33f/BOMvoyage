@@ -11,7 +11,7 @@ the README's [Building](README.md#building) section.
 ```console
 $ git clone https://github.com/b33f/BOMvoyage && cd BOMvoyage
 $ cargo build --release --locked        # binary: target/release/bomvoyage
-$ cargo test --release --locked         # 32 tests: parsers, replay, e2e git
+$ cargo test --release --locked         # 71 tests: parsers, replay, e2e git
 $ cargo clippy --locked --all-targets -- -D warnings
 $ cargo fmt --all -- --check
 ```

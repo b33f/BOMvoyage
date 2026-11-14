@@ -11,9 +11,9 @@ Run everything locally with:
 $ cargo test
 ```
 
-The suite is 53 tests: 52 unit tests in the library plus one end-to-end
-integration test (`tests/integration.rs`) that builds a real git repository
-commit by commit and runs the full scan → graph → temporal-query pipeline.
+The suite is 71 tests: 68 unit tests in the library plus three end-to-end
+integration tests (`tests/integration.rs`) that build a real git repository
+commit by commit and run the full scan → graph → temporal-query pipeline.
 
 ## Repository discovery (`src/scan/discover.rs`)
 
@@ -87,6 +87,9 @@ commit by commit and runs the full scan → graph → temporal-query pipeline.
 |---|---|
 | `url_decode_percent_plus_and_multibyte` | Query-string decoding: `%XX` escapes, `+` as space, multibyte UTF-8; malformed input passes through literally, never panics |
 | `query_param_takes_first_value` | Repeated query params take the first value; absent params return `None` |
+| `embedded_ui_scripts_parse` | Every embedded UI script (`app.js`, `search.js`) parses under `node --check` — the hand-rolled JS has no build step, so a syntax error ships silently and blanks the explorer (skipped where `node` is absent; CI always has it, plus an explicit lint-job gate) |
+| `index_references_only_embedded_assets` | `index.html` references only scripts/styles the server actually embeds and routes |
+| `embedded_ui_wiring_smoke` | Behavior of the real `app.js` run in node (`tests/ui_smoke.mjs`, stubbed DOM + fetch, offline, two worlds): on a detailed graph `init()` executes end-to-end and the "Vulnerable deps + who added them" preset appears **exactly once** (splicing it into the preset array *and* button-injecting it once duplicated it); packages render green (`#3fb950`) in **every** mode, with red triangles marking vulnerable ones |
 
 ## Self-update (`src/update.rs`)
 
@@ -112,11 +115,35 @@ commit by commit and runs the full scan → graph → temporal-query pipeline.
 | `agent_table_is_sane` | The supported-agent table: unique keys, no shared config roots, matches the documented 12-agent set |
 | `embedded_skill_has_valid_frontmatter` | The embedded SKILL.md has valid frontmatter and its body teaches the commands it advertises |
 
+## Detailed mode — deps.dev data (`src/depsdev.rs`)
+
+Detailed mode is opt-in (`--detailed`, plus `--vuln-details` for tier 2) and
+the only tests here that touch the network are none: every one runs against
+fixture JSON or a temp-directory cache.
+
+| Test | What it tests |
+|---|---|
+| `path_escape_cases` | `encodeURIComponent`-style path escaping: npm scoped names (`@types/node` → `%40types%2Fnode`), maven coordinates (`:` → `%3A`), go module paths (`/` → `%2F`), unreserved names unchanged |
+| `pypi_names_normalize_pep503` | PyPI name normalization is PEP 503 (matching the deps.dev key space); npm/cargo/maven names pass through untouched |
+| `ecosystem_mapping` | Graph ecosystem spellings map to deps.dev systems (`python`→`PYPI` … `node`→`NPM`); `generic` (the root node) and unknowns are excluded |
+| `urls_escape_name_and_version` | The per-version API URL and the human-facing deps.dev page URL escape name and version correctly |
+| `version_row_maps_fields` | deps.dev VersionInfo → node-property row: `HOMEPAGE`/`SOURCE_REPO` links, licenses joined, `advisoryKeys` → advisories JSON (+ defensive `aliases`), `vulns` count, `isDeprecated`, timestamp |
+| `version_row_handles_missing_fields` | A minimal VersionInfo produces a complete row (empty license, zero vulns, `[]` advisories) — never a missing key |
+| `not_found_row_shape` | A 404 still writes a complete row (`depsdev_status: "not_found"`, `vulns: 0`) so looked-up-but-absent is distinguishable from never-looked-up |
+| `osv_detail_prefers_database_specific_severity` | OSV advisory mapping: `database_specific.severity` wins (CVSS vectors deliberately unparsed), summary extracted, absent fields → None |
+| `osv_summary_is_capped` | Stored advisory summaries are capped at 200 chars (char-boundary safe) |
+| `fold_osv_details_augments_and_preserves` | Folding OSV details into a row's advisories JSON adds severity/summary and leaves untouched entries (no detail fetched) intact |
+| `collect_ids_dedups_via_caller` | Distinct advisory-id collection across packages; malformed JSON tolerated |
+| `cache_roundtrip_including_negative` | The disk cache writes and reads back, including cached 404 negatives; a missing cache dir is a universal miss and a no-op write |
+| `host_allowlist` | The transport policy: HTTPS to `api.deps.dev`/`api.osv.dev` only — look-alike hosts, plaintext, other schemes, userinfo tricks refused |
+
 ## End-to-end (`tests/integration.rs`)
 
 | Test | What it tests |
 |---|---|
 | `temporal_sbom_end_to_end` | The whole product: a real git repository built commit by commit → `scan` → graph write → temporal Cypher (who added a dep, when, as-of queries at past dates) → idempotent rescan |
+| `detailed_mode_properties_survive_rescan` | Detailed-mode rows round-trip through the production write path, **survive a full rescan** (MERGE never clears unknown properties), and re-applying overwrites idempotently; also pins `/api/meta`'s `detailed_packages` (0 on an undetailed graph, 1 after) which the UI uses to offer the vulnerable-deps console preset — no network, rows hand-built |
+| `detailed_mode_runs_even_when_history_is_current` | Drives the real binary: `scan --detailed` on a repo whose HEAD was already scanned must still run the detailed pass (the "history is current" short-circuit once returned before it — the silently-empty-enrichment bug); `--more-detailed` **implies** `--detailed` (enriches alone, never demands the other flag); plain `--vuln-details` alone still warns. Network-free: offline lookups warn and exit 0 |
 
 ## Adding a test
 

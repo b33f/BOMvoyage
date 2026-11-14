@@ -18,9 +18,14 @@ bomvoyage scan [DIR] --db FILE     # scan only (--force to rescan unchanged HEAD
 bomvoyage serve --db FILE [--port 8334] [--open]
 bomvoyage query --db FILE "CYPHER" # read-only openCypher against the graph, JSON out
 bomvoyage export --db FILE --format spdx|cyclonedx|json|csv [--as-of DATE|SHA] [-o FILE]
+bomvoyage detailed --db FILE       # add deps.dev data to an existing graph in place (no rescan)
 bomvoyage update check             # is there a newer release?
 bomvoyage update apply             # upgrade the binary in place (checksum + provenance verified)
 ```
+
+Global flags `--detailed`, `--vuln-details` and `--more-detailed` (the
+shorthand implying `--detailed`) work on the default path, `scan`, and
+`serve` (and `--vuln-details`/`--more-detailed` on `detailed`).
 
 ## Graph model
 
@@ -60,6 +65,19 @@ WHERE r.since_date <= '2024-06-01' AND (r.removed_date IS NULL OR r.removed_date
 RETURN p.purl ORDER BY p.purl
 ```
 
+Vulnerable dependencies at a point in time, with who added them (only on a
+`--detailed` graph — `vulns` is absent otherwise, so this returns no rows):
+
+```cypher
+MATCH (m:Manifest)-[r:DECLARES]->(p:Package)
+WHERE p.vulns > 0
+  AND r.since_date <= '2024-06-01'
+  AND (r.removed_date IS NULL OR r.removed_date > '2024-06-01')
+MATCH (x:Person)-[a:ADDED]->(p)
+WHERE a.at_sha = r.since_sha
+RETURN x, a, p
+```
+
 A name that is not in the repo returns zero rows by design — first run the
 top-deps query to learn the names present.
 
@@ -76,3 +94,10 @@ top-deps query to learn the names present.
 - The explorer binds `127.0.0.1` only; kill the process to stop serving.
 - Scan caps (commits, manifest sizes) warn loudly rather than truncating
   silently — surface those warnings to the user.
+- **`--detailed` is an opt-in network feature**: it sends dependency names
+  and versions to the third-party deps.dev/OSV APIs to fetch licenses,
+  links, and security advisories (vulnerable packages show as red triangles
+  in the explorer). Ask before enabling it for a user — default paths make
+  no network calls beyond the optional update check. Responses cache under
+  `~/.cache/bomvoyage/`; `bomvoyage detailed` adds the data to an existing
+  graph without rescanning.

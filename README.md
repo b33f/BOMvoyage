@@ -54,10 +54,13 @@ the view you're looking at.
 
 All screenshots below are real BOMvoyage sessions over the
 [neo4j-java-driver](https://github.com/neo4j/neo4j-java-driver) repository
-(388 package versions across 204 commits).
+(242 package versions across 317 commits), run in detailed mode
+(`--detailed --vuln-details`) — packages render green, and any with known
+security advisories break out as red triangles.
 
-**The Developers view** — who added what, at `2023-10-05` mid-playback. Developer
-hubs fan out to the packages they touched; the slider is mid-sweep:
+**The Developers view** — who added what, at `2021-06-01` mid-time-travel.
+Developer hubs fan out to the packages they added; red triangles mark the
+versions with known advisories:
 
 ![Developers view — the Neo4j Java driver's dependency history, mid-playback](docs/screenshots/developers.png)
 
@@ -66,10 +69,11 @@ packages highlighted and listed in the inspector:
 
 ![Dependencies view — the driver module's declared packages](docs/screenshots/dependencies.png)
 
-**A package's story** — `org.slf4j:slf4j-api` as of `2021-08-18`: who added it and
-when, its version timeline, and where it's used:
+**A package's story** — `com.fasterxml.jackson.core/jackson-databind@2.12.3`
+as of `2021-06-01`: license, deps.dev / repository links, and its 15 security
+advisories with severity chips, each linking to its osv.dev page:
 
-![Package inspector — slf4j-api's version timeline](docs/screenshots/package-inspector.png)
+![Package inspector — jackson-databind's advisories with severity chips](docs/screenshots/package-inspector.png)
 
 ## Why a graph, and why embedded
 
@@ -100,15 +104,64 @@ comparison is chronological.
 
 ```text
 bomvoyage                                  # scan + serve (the demo path)
+bomvoyage --detailed                       # the same, with deps.dev data on the graph
 bomvoyage scan   [PATH] [--db bomvoyage.rl] [--force] [--max-commits N]
 bomvoyage serve  [--db bomvoyage.rl] [--port 8334] [--open]
 bomvoyage export [--db bomvoyage.rl] [--format spdx|cyclonedx|json|csv] [--as-of DATE|SHA] [-o FILE]
 bomvoyage query  [--db bomvoyage.rl] <CYPHER>
+bomvoyage detailed [--db bomvoyage.rl] [--vuln-details] [--refresh]   # add deps.dev data to an existing graph, no rescan
 bomvoyage update check                      # is there a newer release?
 bomvoyage update apply                      # upgrade the binary in place
 bomvoyage skill install                     # install the agent skill for every coding agent on this machine
 bomvoyage skill list                        # which agents are detected / installed
 ```
+
+`--detailed`, `--vuln-details` and `--more-detailed` (= `--detailed
+--vuln-details`, implying the first) are global flags — they work on the
+default path, `scan`, and `serve` alike.
+
+### Detailed mode (deps.dev) — optional, off by default
+
+```console
+$ bomvoyage --detailed
+$ bomvoyage serve --detailed --vuln-details   # …with severity + summaries too
+```
+
+Detailed mode enriches every versioned package in the graph with live data
+from the **deps.dev** API: the package's deps.dev page, its repository and
+homepage links, its license (SPDX), and the security advisories that affect
+that exact version. Packages with advisories are drawn as **red triangles**
+in the explorer at HEAD and at every point on the time-travel slider — the
+version keyed into the graph is the version whose advisories you see. All
+other dependencies are drawn **green** (in every mode) so the triangles
+stand out; shape carries the distinction too, for colorblind readers.
+Clicking a package lists each advisory with a link to
+its osv.dev page. On a detailed graph the Cypher console also gains a
+prebuilt **"Vulnerable deps + who added them"** query — every dependency
+with advisories at the slider's point in time, linked to the developer who
+put that version there.
+
+- **Privacy note:** detailed mode makes network calls. It sends each
+  dependency's *name and version* to `api.deps.dev`, and each advisory ID to
+  `api.osv.dev` (with `--vuln-details`) — third-party services, which
+  therefore learn which packages your repository depends on. No source code,
+  file paths, git history, or anything else ever leaves the machine.
+  Detailed mode is off by default; all default paths are network-free apart
+  from the optional update check.
+- **`--vuln-details`** additionally fetches a severity label and a short
+  summary per advisory — one extra call per *distinct* advisory, deduplicated
+  across packages. **`--more-detailed`** is the shorthand for both tiers at
+  once: it *implies* `--detailed`, so `bomvoyage --more-detailed` is the
+  one-flag way to get the full works.
+- **Cached**: responses are stored under `~/.cache/bomvoyage/` and reused
+  forever (the data describes a package version, which doesn't change), so
+  re-runs and the standalone `bomvoyage detailed` command are fast. Delete
+  that directory, or pass `--refresh`, to re-fetch everything.
+- **Fault-tolerant**: network trouble warns per package and never fails a
+  scan. Undetailed graphs simply lack the data — nothing is cleared by a
+  rescan without the flag.
+- Requests to deps.dev can carry your own API key for a higher quota via the
+  `BOMVOYAGE_DEPSDEV_KEY` environment variable.
 
 ### Self-update
 
@@ -182,7 +235,10 @@ $ bomvoyage query --db bomvoyage.rl "MATCH (m:Manifest)-[r:DECLARES]->(p:Package
 - **Git access shells out to `git`** (no libgit2): a pinned `-z`/record-separator
   `git log` invocation, byte-capped stdout, malformed records are errors.
 - **No web framework**: the HTTP layer is hand-rolled over `std::net` and the UI
-  (cytoscape.js) is embedded in the binary — fully offline, nothing to install.
+  (cytoscape.js) is embedded in the binary — nothing to install. Default paths
+  are fully offline apart from the optional daily update check; **detailed
+  mode is the one opt-in network feature** (see the note above on what it
+  sends and to whom).
 - **Bounded by construction**: commit caps, 64 MiB manifest caps, usage-scan file caps;
   hitting a cap warns loudly instead of truncating silently.
 
@@ -298,7 +354,9 @@ attestations. The release process is documented in
 
 See [SECURITY.md](SECURITY.md) for how to report a vulnerability and what the
 tool's security model is (local-only binding, read-only Cypher enforcement,
-treats repository content as untrusted data).
+treats repository content as untrusted data) — including what the opt-in
+**detailed mode** network calls send to third parties (dependency names and
+versions to deps.dev; advisory IDs to OSV) and what they deliberately do not.
 
 Supply-chain gates on every PR: cargo-deny (RustSec advisories including
 known-malicious crates, crates.io-only sources, permissive licenses,

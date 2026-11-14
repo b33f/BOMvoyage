@@ -52,6 +52,25 @@ findings:
 - **The explorer binds `127.0.0.1` only** and serves the current directory's
   graph. It performs no authentication — anything that can reach your loopback
   interface can read it, so don't expose the port.
+- **Detailed mode makes third-party network calls and reveals your dependency
+  list.** Opt-in only (`--detailed`, plus `--vuln-details` for tier 2), off by
+  default. When enabled, BOMvoyage sends each dependency's **name and version**
+  to the deps.dev API (`api.deps.dev`, a service operated by Google) and, with
+  `--vuln-details`, each advisory's ID to the OSV API (`api.osv.dev`). Those
+  services therefore learn which packages — and, in aggregate, which
+  dependency ecosystem and versions — the scanned repository uses. **What is
+  never sent**: source code, file contents, file paths, git history, author
+  information, repository identity, or anything beyond the (ecosystem, name,
+  version) triples already public on package registries. The transport is
+  HTTPS to an allowlisted fixed host set (`api.deps.dev`, `api.osv.dev`) —
+  every URL is constructed by the tool and checked against that list before
+  any connection; redirects are never followed. Responses are cached locally
+  under `~/.cache/bomvoyage/` (delete it to remove all traces). If your
+  organization treats dependency metadata as sensitive (air-gapped builds,
+  confidential projects), leave detailed mode off — every default path is
+  network-free apart from the once-a-day update check below. An API key for
+  deps.dev quota may be supplied via the `BOMVOYAGE_DEPSDEV_KEY` environment
+  variable; it is sent only to `api.deps.dev`.
 - **The Cypher console is read-only by enforcement**, not convention: statements
   starting with mutation keywords are refused server-side before the engine
   sees them, and `export` / `query` open the database read-only.
