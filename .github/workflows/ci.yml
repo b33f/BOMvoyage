@@ -52,8 +52,9 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
 
   deps:
-    # Supply-chain lint: RustSec advisories, dependency sources restricted to
-    # crates.io (no surprise git deps), duplicate-crate warnings.
+    # Supply-chain gate: RustSec advisories (including known-malicious
+    # crates), dependency sources restricted to crates.io (no surprise git
+    # deps), duplicate-crate warnings, and Cargo.lock integrity.
     # Config: deny.toml. Run locally: cargo deny check
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -61,4 +62,33 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: EmbarkStudios/cargo-deny-action@b66acf5e9fe20f8aba065be86778a8a4c846f902 # v2
+      # Lockfile tamper guard: Cargo.lock must be exactly in sync with the
+      # manifests and carry only checksummed crates.io entries — a PR that
+      # hand-edits the lock (swapped source URL, dropped checksum, a dep
+      # Cargo.toml forgot) fails here before it can merge.
+      - name: Lockfile is in sync with manifests (--locked resolves)
+        run: cargo metadata --locked --format-version 1 > /dev/null
+      - name: No checksum-less or git-sourced entries in Cargo.lock
+        run: |
+          python3 - <<'EOF'
+          import json, re, subprocess, sys
+          meta = json.loads(subprocess.check_output(
+              ["cargo", "metadata", "--no-deps", "--format-version", "1"]))
+          members = {p["name"] for p in meta["packages"]}  # workspace crates have no registry source
+          lock = open("Cargo.lock").read()
+          for block in lock.split("[[package]]")[1:]:
+              name = re.search(r'name = "([^"]+)"', block).group(1)
+              version = re.search(r'version = "([^"]+)"', block).group(1)
+              if name in members:
+                  continue
+              source = re.search(r'source = "([^"]+)"', block)
+              if source is None:
+                  sys.exit(f"FAIL: {name} {version} has no registry source (not crates.io-pinned)")
+              if not source.group(1).startswith("registry+https://github.com/rust-lang/crates.io-index"):
+                  sys.exit(f"FAIL: {name} {version} comes from a non-crates.io source: {source.group(1)}")
+              if re.search(r'checksum = ', block) is None:
+                  sys.exit(f"FAIL: {name} {version} has no checksum")
+          print("all external entries are checksummed crates.io pins")
+          EOF
