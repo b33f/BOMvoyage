@@ -1,0 +1,6 @@
+# BOMvoyage embeds text files into the binary (UI assets, the agent skill)
+# via include_str!/include_bytes! — checkouts must be byte-identical on
+# every OS, so text is always LF and binaries are never touched.
+* text=auto eol=lf
+*.png binary
+*.rl binary

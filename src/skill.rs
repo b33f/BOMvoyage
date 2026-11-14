@@ -309,6 +309,7 @@ mod tests {
         let (path, replaced) = install_into(&dir).unwrap();
         assert!(!replaced);
         let text = std::fs::read_to_string(&path).unwrap();
+        let text = text.replace("\r\n", "\n"); // tolerate CRLF checkouts
         assert!(text.starts_with("---\nname: bomvoyage"));
         assert!(text.contains("update apply"));
         let (_, replaced2) = install_into(&dir).unwrap();
@@ -367,15 +368,18 @@ mod sanity {
 
     #[test]
     fn embedded_skill_has_valid_frontmatter() {
-        assert!(SKILL_MD.starts_with("---\n"), "frontmatter first");
-        let end = SKILL_MD[4..].find("\n---").expect("closing frontmatter") + 4;
-        let front = &SKILL_MD[4..end];
+        // CRLF-tolerant: checkouts on Windows may materialize the file with
+        // \r\n (see .gitattributes — forced to LF, but belt-and-braces here).
+        let skill = SKILL_MD.replace("\r\n", "\n");
+        assert!(skill.starts_with("---\n"), "frontmatter first");
+        let end = skill[4..].find("\n---").expect("closing frontmatter") + 4;
+        let front = &skill[4..end];
         assert!(front.contains("name: bomvoyage"));
         assert!(front.contains("description: "));
         // the body actually teaches the commands it advertises
-        assert!(SKILL_MD.contains("bomvoyage scan"));
-        assert!(SKILL_MD.contains("bomvoyage query"));
-        assert!(SKILL_MD.contains("update apply"));
-        assert!(SKILL_MD.contains("--no-update-check"));
+        assert!(skill.contains("bomvoyage scan"));
+        assert!(skill.contains("bomvoyage query"));
+        assert!(skill.contains("update apply"));
+        assert!(skill.contains("--no-update-check"));
     }
 }
