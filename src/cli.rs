@@ -37,10 +37,31 @@ pub struct Cli {
     /// Graph database file (default command only)
     #[arg(long, short, value_name = "FILE", default_value = "bomvoyage.rl")]
     pub db: std::path::PathBuf,
+
+    /// Never check GitHub for a newer release (also: env
+    /// BOMVOYAGE_NO_UPDATE_CHECK=1). The automatic check runs at most once
+    /// a day and never blocks.
+    #[arg(long, global = true)]
+    pub no_update_check: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum UpdateAction {
+    /// Check GitHub for a newer release and report
+    Check,
+    /// Download the newest release for this platform, verify its checksum,
+    /// and replace the running binary in place
+    Apply,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Check for a new release (`update check`) or upgrade in place (`update apply`)
+    Update {
+        /// What to do
+        #[arg(value_enum, default_value = "check")]
+        action: UpdateAction,
+    },
     /// Scan the repo (or refresh an existing graph database)
     Scan {
         /// Repository path

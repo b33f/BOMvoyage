@@ -453,3 +453,27 @@ main { flex: 1; display: flex; min-height: 0; }
 #search-clear { border: 0; background: transparent; padding: 0 4px; color: var(--muted); font-size: 15px; line-height: 1; }
 #search-clear:hover { color: var(--text); background: transparent; }
 @media (max-width: 760px) { #search-box { width: 100%; } #search-group { flex: 1; } }
+
+/* update banner: new release available */
+#update-banner {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  z-index: 60;
+  display: flex; align-items: center; gap: 14px;
+  max-width: min(92vw, 640px);
+  padding: 10px 12px 10px 16px;
+  background: var(--bg-elevated, var(--bg));
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+}
+#update-banner code {
+  font-family: var(--mono, monospace); font-size: 12px;
+  padding: 1px 6px; border-radius: 4px;
+  background: var(--accent-soft); color: var(--accent);
+}
+#update-banner button {
+  flex: none; border: 0; background: transparent; color: var(--muted);
+  font-size: 17px; line-height: 1; padding: 2px 7px; border-radius: 4px;
+}
+#update-banner button:hover { color: var(--text); background: var(--border); }
