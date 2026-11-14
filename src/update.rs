@@ -203,11 +203,7 @@ fn fetch_latest() -> ToolResult<UpdateInfo> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(10))
         .build();
-    let response = agent
-        .get(&format!("{REPO_API}/releases/latest"))
-        .set("User-Agent", USER_AGENT)
-        .call()
-        .map_err(|e| ToolError::Io(std::io::Error::other(format!("release check: {e}"))))?;
+    let response = get_allowlisted(&agent, &format!("{REPO_API}/releases/latest"))?;
     let body: serde_json::Value = response
         .into_json()
         .map_err(|e| ToolError::Io(std::io::Error::other(format!("release check: {e}"))))?;
@@ -277,9 +273,127 @@ pub fn check_command() -> ToolResult<()> {
 
 // ---------------------------------------------------------------- apply
 
+/// The only hosts an upgrade may ever talk to. Every request and every
+/// redirect hop is checked against this list; anything else is refused
+/// before a connection is made.
+const ALLOWED_HOSTS: &[&str] = &[
+    "github.com",
+    "api.github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+];
+const MAX_REDIRECTS: usize = 5;
+
+/// HTTPS to a GitHub host, or refuse. This is the whole policy.
+fn allowlisted(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // strip userinfo (`user@host`) if present
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let host = host.split(':').next().unwrap_or(host); // strip port
+    ALLOWED_HOSTS.contains(&host)
+}
+
+/// GET with redirects followed manually so every hop re-passes the
+/// GitHub-only allowlist (a release asset URL may legitimately redirect to
+/// the CDN; it may never leave *.github.com / githubusercontent.com).
+fn get_allowlisted(agent: &ureq::Agent, url: &str) -> ToolResult<ureq::Response> {
+    let mut current = url.to_string();
+    for _ in 0..=MAX_REDIRECTS {
+        if !allowlisted(&current) {
+            return Err(ToolError::Other(format!(
+                "refusing to fetch {current} — upgrades may only talk to GitHub over HTTPS"
+            )));
+        }
+        let response = agent
+            .get(&current)
+            .set("User-Agent", USER_AGENT)
+            .call()
+            .map_err(|e| ToolError::Other(format!("download failed ({current}): {e}")))?;
+        let status = response.status();
+        if (300..400).contains(&status) {
+            let location = response.header("Location").ok_or_else(|| {
+                ToolError::Other(format!("redirect from {current} had no Location"))
+            })?;
+            current = resolve_redirect(&current, location);
+            continue;
+        }
+        return Ok(response);
+    }
+    Err(ToolError::Other(format!(
+        "too many redirects fetching {url} (max {MAX_REDIRECTS})"
+    )))
+}
+
+/// Join a possibly-relative `Location` onto the base URL.
+fn resolve_redirect(base: &str, location: &str) -> String {
+    if location.starts_with("https://") || location.starts_with("http://") {
+        return location.to_string();
+    }
+    let origin = base
+        .split(['/', '?', '#'])
+        .take(3)
+        .collect::<Vec<_>>()
+        .join("/");
+    // (scheme, empty, host) → "https://host"
+    if location.starts_with('/') {
+        format!("{origin}{location}")
+    } else {
+        format!("{origin}/{location}")
+    }
+}
+
+/// Require that this exact artifact digest has a build-provenance
+/// attestation in this repository (GitHub's attestations API). Release
+/// assets and their checksums ship from the same place, so a checksum
+/// alone proves transport integrity, not provenance; the attestation
+/// exists only if the artifact was produced by this repo's release
+/// workflow (`attest-build-provenance`, id-token: write) — it cannot be
+/// forged by a hijacked maintainer token uploading a new asset.
+fn require_attestation(agent: &ureq::Agent, archive_sha256_hex: &str) -> ToolResult<()> {
+    let url = format!("{REPO_API}/attestations/sha256:{archive_sha256_hex}");
+    let response = get_allowlisted(agent, &url)?;
+    if response.status() == 404 {
+        return Err(ToolError::Other(format!(
+            "no build-provenance attestation for this artifact (sha256:{archive_sha256_hex}) — refusing to install.\n\
+             The artifact was not produced by this repository's release workflow."
+        )));
+    }
+    if response.status() != 200 {
+        return Err(ToolError::Other(format!(
+            "attestation lookup failed with HTTP {} — refusing to install",
+            response.status()
+        )));
+    }
+    let body: serde_json::Value = response
+        .into_json()
+        .map_err(|e| ToolError::Other(format!("attestation lookup unreadable: {e}")))?;
+    // The API answers `{"attestations": [...]}`; older shapes carried a
+    // `total_count`. Accept either, require at least one bundle.
+    let count = body
+        .get("attestations")
+        .and_then(|a| a.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0)
+        .max(
+            body.get("total_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize,
+        );
+    if count == 0 {
+        return Err(ToolError::Other(
+            "no build-provenance attestation for this artifact — refusing to install".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// `bomvoyage update apply`: download the release archive for this platform,
-/// verify it against the release's published SHA-256, and replace the
-/// running binary in place. The new version runs on the next launch.
+/// verify it against the release's published SHA-256 and this repo's build
+/// attestations, and replace the running binary in place. The new version
+/// runs on the next launch.
 pub fn apply_command() -> ToolResult<()> {
     eprintln!("checking for the latest release …");
     let agent = ureq::AgentBuilder::new()
@@ -287,11 +401,7 @@ pub fn apply_command() -> ToolResult<()> {
         .build();
 
     // Latest release metadata: find this platform's assets.
-    let response = agent
-        .get(&format!("{REPO_API}/releases/latest"))
-        .set("User-Agent", USER_AGENT)
-        .call()
-        .map_err(|e| ToolError::Other(format!("release lookup failed: {e}")))?;
+    let response = get_allowlisted(&agent, &format!("{REPO_API}/releases/latest"))?;
     let release: serde_json::Value = response
         .into_json()
         .map_err(|e| ToolError::Other(format!("release lookup failed: {e}")))?;
@@ -351,6 +461,9 @@ pub fn apply_command() -> ToolResult<()> {
     let checksum = download_capped(&agent, checksum_url)?;
     verify_sha256(&archive, &checksum, &archive_name)?;
 
+    eprintln!("verifying build provenance …");
+    require_attestation(&agent, &hex(&Sha256::digest(&archive)))?;
+
     eprintln!("extracting …");
     let binary = extract_binary(&archive, &archive_name, &tag)?;
 
@@ -391,11 +504,7 @@ fn target_triple() -> &'static str {
 }
 
 fn download_capped(agent: &ureq::Agent, url: &str) -> ToolResult<Vec<u8>> {
-    let response = agent
-        .get(url)
-        .set("User-Agent", USER_AGENT)
-        .call()
-        .map_err(|e| ToolError::Other(format!("download failed ({url}): {e}")))?;
+    let response = get_allowlisted(agent, url)?;
     let mut reader = response.into_reader().take(MAX_DOWNLOAD_BYTES + 1);
     let mut bytes = Vec::new();
     reader
@@ -528,6 +637,51 @@ mod tests {
         assert!(!version_is_newer("0.1.1-beta", "0.1.1"));
         assert!(version_is_newer("0.1.2-beta", "0.1.1"));
         assert!(version_is_newer("0.10.0", "0.9.0"));
+    }
+
+    #[test]
+    fn github_only_urls() {
+        // allowed
+        assert!(allowlisted(
+            "https://api.github.com/repos/b33f/BOMvoyage/releases/latest"
+        ));
+        assert!(allowlisted(
+            "https://github.com/b33f/BOMvoyage/releases/download/v0.2.0/x.tar.gz"
+        ));
+        assert!(allowlisted(
+            "https://objects.githubusercontent.com/x/y?token=z"
+        ));
+        assert!(allowlisted(
+            "https://release-assets.githubusercontent.com/x"
+        ));
+        assert!(allowlisted("https://github.com:443/a"));
+        // refused: other hosts, other schemes, garbage
+        assert!(!allowlisted("http://github.com/a")); // no plaintext
+        assert!(!allowlisted("https://evil.example.com/x.tar.gz"));
+        assert!(!allowlisted("https://github.com.evil.example.com/x.tar.gz"));
+        assert!(!allowlisted("https://user@evil.example.com/x"));
+        assert!(!allowlisted("ftp://github.com/a"));
+        assert!(!allowlisted("file:///etc/passwd"));
+        assert!(!allowlisted(""));
+    }
+
+    #[test]
+    fn redirect_join() {
+        assert_eq!(
+            resolve_redirect(
+                "https://github.com/a/b",
+                "https://objects.githubusercontent.com/x"
+            ),
+            "https://objects.githubusercontent.com/x"
+        );
+        assert_eq!(
+            resolve_redirect("https://api.github.com/repos/x", "/some/path?q=1"),
+            "https://api.github.com/some/path?q=1"
+        );
+        assert_eq!(
+            resolve_redirect("https://github.com/a", "rel/path"),
+            "https://github.com/rel/path"
+        );
     }
 
     #[test]
