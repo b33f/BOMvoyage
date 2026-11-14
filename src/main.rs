@@ -9,10 +9,10 @@ use std::sync::Arc;
 use clap::Parser;
 use relate::{Database, OpenMode, OpenOptions};
 
-use bomvoyage::cli::{Cli, Command};
+use bomvoyage::cli::{Cli, Command, UpdateAction};
 use bomvoyage::error::{ToolError, ToolResult};
 use bomvoyage::graph::SbomGraph;
-use bomvoyage::{export, graph, scan, server};
+use bomvoyage::{export, graph, scan, server, update};
 
 fn main() {
     let cli = Cli::parse();
@@ -28,13 +28,20 @@ fn main() {
 
 fn run(cli: &Cli) -> ToolResult<()> {
     match &cli.command {
-        None => all_in_one(&cli.path, &cli.db, 8334, 5000),
+        Some(Command::Update { action }) => match action {
+            UpdateAction::Check => update::check_command(),
+            UpdateAction::Apply => update::apply_command(),
+        },
+        None => all_in_one(&cli.path, &cli.db, 8334, 5000, cli.no_update_check),
         Some(Command::Scan {
             path,
             db,
             force,
             max_commits,
-        }) => cmd_scan(path, db, *force, *max_commits),
+        }) => {
+            spawn_daily_update_check(cli.no_update_check);
+            cmd_scan(path, db, *force, *max_commits)
+        }
         Some(Command::Serve {
             path,
             db,
@@ -44,25 +51,52 @@ fn run(cli: &Cli) -> ToolResult<()> {
         }) => {
             let db = Arc::new(Database::open(&db.to_string_lossy())?);
             graph::ensure_schema(&db)?;
-            scan_and_serve(path, db, *port, *open, *max_commits)
+            scan_and_serve(path, db, *port, *open, *max_commits, cli.no_update_check)
         }
         Some(Command::Export {
             db,
             format,
             as_of,
             output,
-        }) => cmd_export(db, *format, as_of.as_deref(), output.as_deref()),
-        Some(Command::Query { db, cypher }) => cmd_query(db, cypher),
+        }) => {
+            spawn_daily_update_check(cli.no_update_check);
+            cmd_export(db, *format, as_of.as_deref(), output.as_deref())
+        }
+        Some(Command::Query { db, cypher }) => {
+            spawn_daily_update_check(cli.no_update_check);
+            cmd_query(db, cypher)
+        }
     }
+}
+
+/// The automatic daily release check: background thread, silent on failure,
+/// prints a one-line notice to stderr when a newer release exists. Used by
+/// every non-serve invocation; the serve path passes the result to the UI.
+fn spawn_daily_update_check(no_update_check: bool) {
+    if update::disabled(no_update_check) {
+        return;
+    }
+    std::thread::spawn(|| {
+        update::daily_check();
+        if let Some(notice) = update::pending_notice() {
+            eprintln!("notice: {notice}");
+        }
+    });
 }
 
 /// The demo path: `bomvoyage` in a repo = fast current scan, serve
 /// immediately with the browser opened, and keep walking git history in the
 /// background to fill in the time-travel data.
-fn all_in_one(path: &Path, db: &Path, port: u16, max_commits: u64) -> ToolResult<()> {
+fn all_in_one(
+    path: &Path,
+    db: &Path,
+    port: u16,
+    max_commits: u64,
+    no_update_check: bool,
+) -> ToolResult<()> {
     let db = Arc::new(Database::open(&db.to_string_lossy())?);
     graph::ensure_schema(&db)?;
-    scan_and_serve(path, db, port, true, max_commits)
+    scan_and_serve(path, db, port, true, max_commits, no_update_check)
 }
 
 /// Shared serve-path logic: bring the database's CURRENT state up to date
@@ -74,7 +108,19 @@ fn scan_and_serve(
     port: u16,
     open_browser: bool,
     max_commits: u64,
+    no_update_check: bool,
 ) -> ToolResult<()> {
+    // The daily release check: background thread feeding /api/update (the
+    // UI shows a banner when a new release exists) + a stderr notice.
+    if !update::disabled(no_update_check) {
+        std::thread::spawn(|| {
+            update::daily_check();
+            if let Some(notice) = update::pending_notice() {
+                eprintln!("notice: {notice}");
+            }
+        });
+    }
+
     let head = scan::git::head_sha(path)?;
     let history_current = graph::stored_history_head(&db)?.as_deref() == Some(head.as_str());
 

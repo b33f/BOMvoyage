@@ -687,6 +687,7 @@ async function init() {
 
   await refresh();
   pollHistoryStatus(meta.history_current);
+  pollUpdateAvailable();
   // The default experience: the sweep starts itself on load, oldest day
   // first, and loops until the user pauses.
   updatePlayButtons();
@@ -694,6 +695,37 @@ async function init() {
     $("slider").value = 0;
     startPlay();
   }
+}
+
+// ---------------------------------------------------------------- update banner
+
+// The release check runs on a background thread in the binary; poll
+// /api/update briefly until it reports, then show a dismissible box.
+function pollUpdateAvailable() {
+  let polls = 0;
+  const tick = async () => {
+    let info;
+    try {
+      info = await fetchJson("/api/update");
+    } catch {
+      return; // server without update support or gone — stay silent
+    }
+    if (info.available) return showUpdateBanner(info);
+    if (info.checking && ++polls < 15) setTimeout(tick, 2000);
+  };
+  setTimeout(tick, 3000);
+}
+
+function showUpdateBanner(info) {
+  if ($("update-banner")) return;
+  const box = document.createElement("div");
+  box.id = "update-banner";
+  box.innerHTML =
+    `<span>⬆ <b>BOMvoyage ${escapeHtml(info.latest)}</b> is available` +
+    ` (you have ${escapeHtml(info.current)}) — run <code>bomvoyage update apply</code> to upgrade</span>` +
+    `<button type="button" title="Dismiss">×</button>`;
+  box.querySelector("button").addEventListener("click", () => box.remove());
+  document.body.appendChild(box);
 }
 
 function setCommits(rows) {

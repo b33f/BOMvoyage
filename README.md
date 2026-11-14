@@ -104,7 +104,23 @@ bomvoyage scan   [PATH] [--db bomvoyage.rl] [--force] [--max-commits N]
 bomvoyage serve  [--db bomvoyage.rl] [--port 8334] [--open]
 bomvoyage export [--db bomvoyage.rl] [--format spdx|cyclonedx|json|csv] [--as-of DATE|SHA] [-o FILE]
 bomvoyage query  [--db bomvoyage.rl] <CYPHER>
+bomvoyage update check                      # is there a newer release?
+bomvoyage update apply                      # upgrade the binary in place
 ```
+
+### Self-update
+
+BOMvoyage checks GitHub for a newer release **at most once a day**, in a
+background thread that never blocks or fails the tool. When a new release
+exists you get a one-line notice on the CLI and a banner box in the explorer
+UI. `bomvoyage update apply` downloads the release archive for your platform,
+verifies it against the release's published SHA-256 checksum, and replaces the
+running binary in place — the new version runs on the next launch.
+
+Opt out of the automatic check with `--no-update-check` (works on any
+subcommand) or the environment variable `BOMVOYAGE_NO_UPDATE_CHECK=1`
+(`true`/`yes`/`on` also accepted). The explicit `bomvoyage update check` /
+`apply` commands always run regardless.
 
 `--as-of` accepts an ISO date (`2024-06-01`), an ISO datetime, a commit-sha prefix, or
 `HEAD`. `export` and `query` open the database read-only; a re-scan of an unchanged

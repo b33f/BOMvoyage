@@ -8,3 +8,4 @@ pub mod export;
 pub mod graph;
 pub mod scan;
 pub mod server;
+pub mod update;

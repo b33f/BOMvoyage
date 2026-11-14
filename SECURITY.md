@@ -62,6 +62,15 @@ findings:
 - **Release artifacts are reproducible-ish and checksummed**: every release
   ships a SHA-256 checksum per platform archive, built by the tagged CI
   workflow from a clean checkout.
+- **The self-update path is verified end to end**: the automatic daily
+  release check is a single HTTPS (rustls) call to the GitHub API that runs
+  on a background thread and is silent on failure; it can be disabled with
+  `--no-update-check` or `BOMVOYAGE_NO_UPDATE_CHECK=1`. `update apply`
+  downloads only from this repository's GitHub releases, verifies the
+  archive against the release's published SHA-256 before replacing anything,
+  caps download size, and installs with a rename dance that rolls back on
+  failure. It never executes anything from the download — only replaces the
+  binary file.
 - **CI is supply-chain hardened**: every GitHub Action is pinned to a **full
   commit SHA** (never a movable tag or branch), workflows run least-privilege
   (`contents: read` everywhere except the release job's `contents: write`),

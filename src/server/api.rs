@@ -70,6 +70,7 @@ impl Api {
                     self.diff(qp(req, "from").as_deref(), qp(req, "to").as_deref())
                 }
                 ("GET", "/api/commits") => self.commits(),
+                ("GET", "/api/update") => Ok(crate::update::snapshot()),
                 ("POST", "/api/query") => self.raw_query(&req.body),
                 ("GET", _) | ("POST", _) => Ok(serde_json::json!({"error": "not found"})),
                 _ => Ok(serde_json::json!({"error": "method not allowed"})),
