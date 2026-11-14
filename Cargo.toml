@@ -32,3 +32,6 @@ tempfile = "3"
 [profile.release]
 strip = true
 lto = "thin"
+
+[dev-dependencies]
+fastrand = "2"
