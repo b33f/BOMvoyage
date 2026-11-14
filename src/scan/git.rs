@@ -224,16 +224,64 @@ pub fn manifest_history(
     // git log is newest-first; replay oldest-first.
     out.reverse();
 
-    // Fetch content per (commit, manifest path). A missing path at a commit
-    // means the manifest was deleted (or not yet present) there.
-    let mut with_content = Vec::with_capacity(out.len());
-    for (commit, paths) in out {
-        let mut files = Vec::with_capacity(paths.len());
-        for path in paths {
-            let content = show_opt(repo, &commit.sha, &path, caps.max_manifest_bytes)?;
-            files.push((path, content));
+    // Fetch content per (commit, manifest path) — in parallel. Each `git
+    // show` is an independent subprocess, and one per blob is where long
+    // histories spend their wall clock; the reads share nothing, so a small
+    // worker pool over the flat job list turns process-spawn latency into
+    // throughput. Results land in pre-sized slots keyed by job order, so the
+    // output (and every warning) is identical to the serial walk, and the
+    // lowest-indexed failure is reported, so even the error is deterministic.
+    let mut starts = Vec::with_capacity(out.len());
+    let mut total_jobs = 0usize;
+    for (_, paths) in &out {
+        starts.push(total_jobs);
+        total_jobs += paths.len();
+    }
+    let results = std::sync::Mutex::new(
+        out.iter()
+            .map(|(_, paths)| vec![None; paths.len()])
+            .collect::<Vec<_>>(),
+    );
+    let errors: std::sync::Mutex<Vec<(usize, ToolError)>> = std::sync::Mutex::new(Vec::new());
+    let next_job = std::sync::atomic::AtomicUsize::new(0);
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(16); // a git subprocess per job; more than 16 spawns thrash
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| loop {
+                if !errors.lock().expect("errors mutex").is_empty() {
+                    return; // a sibling failed; stop feeding the pool
+                }
+                let job = next_job.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if job >= total_jobs {
+                    return;
+                }
+                // Flat job index → (record, file): starts is strictly
+                // increasing (empty records were skipped above).
+                let r = starts.partition_point(|&st| st <= job) - 1;
+                let f = job - starts[r];
+                let (commit, paths) = &out[r];
+                match show_opt(repo, &commit.sha, &paths[f], caps.max_manifest_bytes) {
+                    Ok(content) => results.lock().expect("results mutex")[r][f] = content,
+                    Err(e) => {
+                        errors.lock().expect("errors mutex").push((job, e));
+                        return;
+                    }
+                }
+            });
         }
-        with_content.push((commit, files));
+    });
+    let mut errs = errors.into_inner().expect("errors mutex");
+    if !errs.is_empty() {
+        errs.sort_by_key(|(job, _)| *job);
+        return Err(errs.remove(0).1);
+    }
+    let results = results.into_inner().expect("results mutex");
+    let mut with_content = Vec::with_capacity(out.len());
+    for ((commit, paths), files) in out.into_iter().zip(results) {
+        with_content.push((commit, paths.into_iter().zip(files).collect()));
     }
     Ok(with_content)
 }

@@ -18,6 +18,7 @@ pub enum Eco {
     Java,
     Rust,
     Go,
+    Node,
 }
 
 impl Eco {
@@ -27,6 +28,7 @@ impl Eco {
             Eco::Java => "maven",
             Eco::Rust => "cargo",
             Eco::Go => "golang",
+            Eco::Node => "npm",
         }
     }
 }
@@ -47,6 +49,10 @@ pub enum ManifestKind {
     CargoLock,
     GoMod,
     GoSum,
+    PackageJson,
+    PackageLock,
+    YarnLock,
+    PnpmLock,
 }
 
 impl ManifestKind {
@@ -59,13 +65,24 @@ impl ManifestKind {
             ManifestKind::PomXml | ManifestKind::Gradle | ManifestKind::GradleLockfile => Eco::Java,
             ManifestKind::CargoToml | ManifestKind::CargoLock => Eco::Rust,
             ManifestKind::GoMod | ManifestKind::GoSum => Eco::Go,
+            ManifestKind::PackageJson
+            | ManifestKind::PackageLock
+            | ManifestKind::YarnLock
+            | ManifestKind::PnpmLock => Eco::Node,
         }
     }
 
     /// True when this manifest yields dependency *edges* between packages,
     /// not just a flat list.
     pub fn is_graph_source(self) -> bool {
-        matches!(self, ManifestKind::CargoLock | ManifestKind::GoMod)
+        matches!(
+            self,
+            ManifestKind::CargoLock
+                | ManifestKind::GoMod
+                | ManifestKind::PackageLock
+                | ManifestKind::YarnLock
+                | ManifestKind::PnpmLock
+        )
     }
 }
 
@@ -100,6 +117,9 @@ impl PkgRef {
     /// packages get a versionless purl (`pkg:pypi/requests`). Maven names
     /// carry `group:artifact`, rendered as the purl namespace `group/artifact`.
     pub fn purl(&self) -> String {
+        if self.eco == Eco::Node {
+            return parse::npm::npm_purl(&self.name, &self.version);
+        }
         let (ns, name) = match self.eco {
             Eco::Java => match self.name.split_once(':') {
                 Some((g, a)) => (g.to_string(), a.to_string()),
@@ -244,7 +264,7 @@ pub fn current_only(repo: &std::path::Path) -> ToolResult<ScanOutput> {
         files.push((m.path.clone(), content));
     }
     let history: ManifestHistory = vec![(head, files)];
-    let replay = replay_history(history, ScanCaps::default(), &mut warnings);
+    let replay = replay_history(history, &mut warnings);
 
     let all_packages: Vec<PkgRef> = replay.packages.values().cloned().collect();
     let imports = usage::scan_usage(repo, &all_packages, &manifests, &mut warnings)?;
@@ -278,7 +298,8 @@ impl Default for ScanCaps {
     fn default() -> Self {
         Self {
             max_commits: 5000,
-            max_manifest_bytes: 4 * 1024 * 1024,
+            // Big monorepo package-lock.json files run to tens of MB.
+            max_manifest_bytes: 64 * 1024 * 1024,
         }
     }
 }
@@ -318,11 +339,17 @@ pub fn run(repo: &std::path::Path, caps: ScanCaps) -> ToolResult<ScanOutput> {
     // Walk history over all paths; keep commits touching manifest-shaped files
     // (this covers manifests deleted before HEAD). For each such commit, fetch
     // each touched manifest's content at that commit.
+    let t = std::time::Instant::now();
     let history = git::manifest_history(repo, caps, &mut warnings)?;
-    let replay = replay_history(history, caps, &mut warnings);
+    eprintln!("  phase: history fetch {:?}", t.elapsed());
+    let t = std::time::Instant::now();
+    let replay = replay_history(history, &mut warnings);
+    eprintln!("  phase: replay {:?}", t.elapsed());
 
     let all_packages: Vec<PkgRef> = replay.packages.values().cloned().collect();
+    let t = std::time::Instant::now();
     let imports = usage::scan_usage(repo, &all_packages, &manifests, &mut warnings)?;
+    eprintln!("  phase: usage {:?}", t.elapsed());
 
     Ok(ScanOutput {
         repo_name: repo
@@ -356,11 +383,14 @@ struct ReplayState {
 /// manifests (Cargo.lock, go.mod) also emit DEPENDS_ON edge intervals: the
 /// edges from one version of the file are closed when the file next changes
 /// (or left open at HEAD).
-fn replay_history(
-    history: ManifestHistory,
-    _caps: ScanCaps,
-    warnings: &mut Vec<ScanWarning>,
-) -> ReplayState {
+///
+/// Parsing (the expensive half on lockfile-churny repos) is fanned out
+/// across cores in chunks before the sequential pass: it is pure per
+/// (path, kind, content), while the diff needs the mutable open-interval
+/// state and stays serial. Chunking keeps only one chunk's parsed sets in
+/// memory at a time. Warnings are emitted from the serial pass in exactly
+/// the order the inline parse used to produce.
+fn replay_history(history: ManifestHistory, warnings: &mut Vec<ScanWarning>) -> ReplayState {
     let mut intervals: Vec<DepInterval> = Vec::new();
     let mut dep_edges: Vec<DepEdge> = Vec::new();
     let mut packages: BTreeMap<String, PkgRef> = BTreeMap::new();
@@ -368,111 +398,134 @@ fn replay_history(
     let mut touched = Vec::new();
     // Per manifest path: dep name -> (package, commit that opened the interval).
     let mut open: BTreeMap<String, BTreeMap<String, (PkgRef, CommitInfo)>> = BTreeMap::new();
-    // Per graph-source path: indices into dep_edges of the currently open interval.
-    let mut open_edges: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    // Per graph-source path: open edge (from, to, source) -> index into
+    // dep_edges. Edges are diffed like packages: an unchanged edge keeps its
+    // interval across lockfile commits instead of being closed and reopened
+    // (which multiplied history size by the number of lockfile commits).
+    let mut open_edges: BTreeMap<String, OpenEdges> = BTreeMap::new();
 
-    for (commit, files) in history {
-        commits.push(commit.clone());
-        for (path, _content) in &files {
-            touched.push((commit.sha.clone(), path.clone()));
-        }
-        for (path, content) in files {
-            let Some(kind) = discover::kind_for(&path) else {
-                continue;
-            };
-
-            let Some(content) = content else {
-                // Manifest deleted at this commit: close every open interval on it.
-                if let Some(map) = open.get_mut(&path) {
-                    for (pkg, since) in map.values() {
-                        intervals.push(DepInterval {
-                            manifest: path.clone(),
-                            pkg: pkg.clone(),
-                            since: since.clone(),
-                            until: Some(commit.clone()),
-                        });
-                    }
-                    map.clear();
-                }
-                close_edge_interval(&mut dep_edges, open_edges.get_mut(&path), &commit);
-                continue;
-            };
-
-            let parsed = parse::parse_manifest(&path, kind, &content);
-            let new_set: BTreeMap<String, PkgRef> = match parsed {
-                Ok(refs) => refs.into_iter().map(|p| (p.name.clone(), p)).collect(),
-                Err(reason) => {
-                    warnings.push(ScanWarning::UnparseableManifest {
-                        path: path.clone(),
-                        commit: commit.sha.clone(),
-                        reason,
-                    });
+    for chunk in history.chunks(PARSE_CHUNK) {
+        let parsed = preparse_chunk(chunk);
+        for ((commit, files), pre_list) in chunk.iter().zip(parsed) {
+            commits.push(commit.clone());
+            for (path, _content) in files {
+                touched.push((commit.sha.clone(), path.clone()));
+            }
+            for ((path, _content), pre) in files.iter().zip(pre_list) {
+                let Some(kind) = discover::kind_for(path) else {
                     continue;
-                }
-            };
-
-            let entry = open.entry(path.clone()).or_default();
-            // Bumps: close the old interval, open a new one. Removes: close.
-            let names: Vec<String> = entry.keys().cloned().collect();
-            for name in names {
-                let (old, since) = entry.get(&name).expect("key was just read").clone();
-                match new_set.get(&name) {
-                    Some(new_pkg) if new_pkg.identity() != old.identity() => {
-                        intervals.push(DepInterval {
-                            manifest: path.clone(),
-                            pkg: old,
-                            since,
-                            until: Some(commit.clone()),
-                        });
-                        entry.insert(name.clone(), (new_pkg.clone(), commit.clone()));
-                    }
-                    Some(_) => {}
-                    None => {
-                        intervals.push(DepInterval {
-                            manifest: path.clone(),
-                            pkg: old,
-                            since,
-                            until: Some(commit.clone()),
-                        });
-                        entry.remove(&name);
-                    }
-                }
-            }
-            // Adds: open new intervals.
-            for (name, pkg) in &new_set {
-                if !entry.contains_key(name) {
-                    entry.insert(name.clone(), (pkg.clone(), commit.clone()));
-                }
-            }
-            for pkg in new_set.into_values() {
-                packages.insert(pkg.purl(), pkg);
-            }
-
-            // Graph-source manifests yield dependency EDGES for this interval.
-            if kind.is_graph_source() {
-                close_edge_interval(&mut dep_edges, open_edges.get_mut(&path), &commit);
-                match parse::parse_dep_edges(&path, kind, &content) {
-                    Ok(edges) => {
-                        let mut idxs = Vec::with_capacity(edges.len());
-                        for (from, to, source) in edges {
-                            dep_edges.push(DepEdge {
-                                from,
-                                to,
-                                source,
-                                since_sha: commit.sha.clone(),
-                                since_date: commit.date.clone(),
-                                removed_sha: None,
-                                removed_date: None,
-                            });
-                            idxs.push(dep_edges.len() - 1);
+                };
+                match pre {
+                    PreParsed::Deleted => {
+                        // Manifest deleted at this commit: close every open
+                        // interval on it.
+                        if let Some(map) = open.get_mut(path) {
+                            for (pkg, since) in map.values() {
+                                intervals.push(DepInterval {
+                                    manifest: path.clone(),
+                                    pkg: pkg.clone(),
+                                    since: since.clone(),
+                                    until: Some(commit.clone()),
+                                });
+                            }
+                            map.clear();
                         }
-                        open_edges.insert(path, idxs);
+                        close_edge_interval(&mut dep_edges, open_edges.get_mut(path), commit);
+                        continue;
                     }
-                    Err(reason) => warnings.push(ScanWarning::UnparseableManifest {
-                        path: path.clone(),
-                        commit: commit.sha.clone(),
-                        reason,
-                    }),
+                    PreParsed::Skip => continue,
+                    PreParsed::Unparseable(reason) => {
+                        warnings.push(ScanWarning::UnparseableManifest {
+                            path: path.clone(),
+                            commit: commit.sha.clone(),
+                            reason,
+                        });
+                        continue;
+                    }
+                    PreParsed::Parsed {
+                        pkgs: new_set,
+                        edges,
+                    } => {
+                        let entry = open.entry(path.clone()).or_default();
+                        // Bumps: close the old interval, open a new one. Removes: close.
+                        let names: Vec<String> = entry.keys().cloned().collect();
+                        for name in names {
+                            let (old, since) = entry.get(&name).expect("key was just read").clone();
+                            match new_set.get(&name) {
+                                Some(new_pkg) if new_pkg.identity() != old.identity() => {
+                                    intervals.push(DepInterval {
+                                        manifest: path.clone(),
+                                        pkg: old,
+                                        since,
+                                        until: Some(commit.clone()),
+                                    });
+                                    entry.insert(name.clone(), (new_pkg.clone(), commit.clone()));
+                                }
+                                Some(_) => {}
+                                None => {
+                                    intervals.push(DepInterval {
+                                        manifest: path.clone(),
+                                        pkg: old,
+                                        since,
+                                        until: Some(commit.clone()),
+                                    });
+                                    entry.remove(&name);
+                                }
+                            }
+                        }
+                        // Adds: open new intervals.
+                        for (name, pkg) in &new_set {
+                            if !entry.contains_key(name) {
+                                entry.insert(name.clone(), (pkg.clone(), commit.clone()));
+                            }
+                        }
+                        for pkg in new_set.into_values() {
+                            packages.insert(pkg.purl(), pkg);
+                        }
+
+                        // Graph-source manifests yield dependency EDGES for
+                        // this interval.
+                        if kind.is_graph_source() {
+                            match edges {
+                                Ok(edges) => {
+                                    let new_edges: std::collections::BTreeSet<EdgeKey> =
+                                        edges.into_iter().collect();
+                                    let open_now = open_edges.entry(path.clone()).or_default();
+                                    // Removed edges: close their interval.
+                                    open_now.retain(|key, &mut i| {
+                                        if new_edges.contains(key) {
+                                            return true;
+                                        }
+                                        let e = &mut dep_edges[i];
+                                        e.removed_sha = Some(commit.sha.clone());
+                                        e.removed_date = Some(commit.date.clone());
+                                        false
+                                    });
+                                    // New edges: open an interval.
+                                    for key in new_edges {
+                                        if open_now.contains_key(&key) {
+                                            continue;
+                                        }
+                                        dep_edges.push(DepEdge {
+                                            from: key.0.clone(),
+                                            to: key.1.clone(),
+                                            source: key.2,
+                                            since_sha: commit.sha.clone(),
+                                            since_date: commit.date.clone(),
+                                            removed_sha: None,
+                                            removed_date: None,
+                                        });
+                                        open_now.insert(key, dep_edges.len() - 1);
+                                    }
+                                }
+                                Err(reason) => warnings.push(ScanWarning::UnparseableManifest {
+                                    path: path.clone(),
+                                    commit: commit.sha.clone(),
+                                    reason,
+                                }),
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -499,22 +552,128 @@ fn replay_history(
     }
 }
 
+/// How many history records get parsed per parallel batch — bounds the
+/// memory held in parsed dep sets.
+const PARSE_CHUNK: usize = 128;
+
+/// One manifest file's parse, done ahead of the sequential diff.
+enum PreParsed {
+    /// Content is None — the manifest was deleted at this commit.
+    Deleted,
+    /// Not a manifest-shaped path (kept for zip-alignment).
+    Skip,
+    Unparseable(String),
+    Parsed {
+        pkgs: BTreeMap<String, PkgRef>,
+        /// Edge set for graph-source manifests only.
+        edges: Result<Vec<(String, String, &'static str)>, String>,
+    },
+}
+
+/// Parse every manifest file in the chunk across the worker pool. Parsing is
+/// pure per (path, content), so this shares nothing; results slot back into
+/// record/file order.
+fn preparse_chunk(chunk: &[HistoryRecord]) -> Vec<Vec<PreParsed>> {
+    let mut starts = Vec::with_capacity(chunk.len());
+    let mut total_jobs = 0usize;
+    for (_, files) in chunk {
+        starts.push(total_jobs);
+        total_jobs += files.len();
+    }
+    let results = std::sync::Mutex::new(
+        chunk
+            .iter()
+            .map(|(_, files)| {
+                (0..files.len())
+                    .map(|_| PreParsed::Skip)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>(),
+    );
+    let next_job = std::sync::atomic::AtomicUsize::new(0);
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(16);
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| loop {
+                let job = next_job.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if job >= total_jobs {
+                    return;
+                }
+                let r = starts.partition_point(|&st| st <= job) - 1;
+                let f = job - starts[r];
+                let (path, content) = &chunk[r].1[f];
+                let parsed = match content {
+                    None => PreParsed::Deleted,
+                    Some(bytes) => match discover::kind_for(path) {
+                        None => PreParsed::Skip,
+                        Some(kind) => match parse::parse_manifest(path, kind, bytes) {
+                            Err(reason) => PreParsed::Unparseable(reason),
+                            Ok(refs) => {
+                                let edges = if kind.is_graph_source() {
+                                    parse::parse_dep_edges(path, kind, bytes)
+                                        .map_err(|e| e.to_string())
+                                } else {
+                                    Ok(Vec::new())
+                                };
+                                PreParsed::Parsed {
+                                    pkgs: keyed_by_name(refs),
+                                    edges,
+                                }
+                            }
+                        },
+                    },
+                };
+                results.lock().expect("preparse results mutex")[r][f] = parsed;
+            });
+        }
+    });
+    results.into_inner().expect("preparse results mutex")
+}
+
 /// Close the currently open DEPENDS_ON interval for one manifest path.
+type EdgeKey = (String, String, &'static str);
+type OpenEdges = BTreeMap<EdgeKey, usize>;
+
+/// Manifest deleted: close every open edge interval it carried.
 fn close_edge_interval(
     dep_edges: &mut [DepEdge],
-    open: Option<&mut Vec<usize>>,
+    open: Option<&mut OpenEdges>,
     commit: &CommitInfo,
 ) {
-    if let Some(idxs) = open {
-        for &i in idxs.iter() {
+    if let Some(open) = open {
+        for &i in open.values() {
             let e = &mut dep_edges[i];
             if e.removed_sha.is_none() {
                 e.removed_sha = Some(commit.sha.clone());
                 e.removed_date = Some(commit.date.clone());
             }
         }
-        idxs.clear();
+        open.clear();
     }
+}
+
+/// Key a manifest's packages for interval diffing. The name is the key, so
+/// a version change reads as a bump of the same dependency — except where
+/// one lockfile holds several versions of a name at once (routine in npm
+/// and Cargo), where each version is keyed by its purl so none is dropped.
+fn keyed_by_name(refs: Vec<PkgRef>) -> BTreeMap<String, PkgRef> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for p in &refs {
+        *counts.entry(p.name.clone()).or_default() += 1;
+    }
+    refs.into_iter()
+        .map(|p| {
+            let key = if counts[&p.name] > 1 {
+                p.purl()
+            } else {
+                p.name.clone()
+            };
+            (key, p)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -552,6 +711,82 @@ mod tests {
         )
     }
 
+    fn lock(pkgs: &[(&str, &str, &[&str])]) -> Vec<u8> {
+        let mut entries = serde_json::Map::new();
+        for (path, version, deps) in pkgs {
+            let deps: serde_json::Map<String, serde_json::Value> =
+                deps.iter().map(|d| (d.to_string(), "*".into())).collect();
+            entries.insert(
+                path.to_string(),
+                serde_json::json!({"version": version, "dependencies": deps}),
+            );
+        }
+        serde_json::json!({"lockfileVersion": 3, "packages": entries})
+            .to_string()
+            .into_bytes()
+    }
+
+    #[test]
+    fn unchanged_edges_keep_one_interval_and_duplicate_versions_survive() {
+        let v1 = lock(&[
+            ("node_modules/a", "1.0.0", &["b"]),
+            ("node_modules/b", "3.0.0", &[]),
+            ("node_modules/c", "1.0.0", &["b"]),
+            ("node_modules/c/node_modules/b", "2.0.0", &[]),
+        ]);
+        // c2: only `a` bumps; every other edge is unchanged.
+        let v2 = lock(&[
+            ("node_modules/a", "1.1.0", &["b"]),
+            ("node_modules/b", "3.0.0", &[]),
+            ("node_modules/c", "1.0.0", &["b"]),
+            ("node_modules/c/node_modules/b", "2.0.0", &[]),
+        ]);
+        let history = vec![
+            history_entry(
+                "c1",
+                "2024-01-01T00:00:00Z",
+                vec![("package-lock.json", Some(v1))],
+            ),
+            history_entry(
+                "c2",
+                "2024-02-01T00:00:00Z",
+                vec![("package-lock.json", Some(v2))],
+            ),
+        ];
+        let mut warnings = Vec::new();
+        let out = replay_history(history, &mut warnings);
+        assert!(warnings.is_empty());
+
+        // c -> b@2.0.0 never changed: exactly one interval, still open.
+        let c_edges: Vec<&DepEdge> = out
+            .dep_edges
+            .iter()
+            .filter(|e| e.from == "pkg:npm/c@1.0.0")
+            .collect();
+        assert_eq!(c_edges.len(), 1);
+        assert_eq!(c_edges[0].to, "pkg:npm/b@2.0.0");
+        assert_eq!(c_edges[0].since_sha, "c1");
+        assert!(c_edges[0].removed_sha.is_none());
+        // a@1.0.0's edge closed at c2; a@1.1.0's opened there.
+        assert!(out
+            .dep_edges
+            .iter()
+            .any(|e| e.from == "pkg:npm/a@1.0.0" && e.removed_sha.as_deref() == Some("c2")));
+        assert!(out.dep_edges.iter().any(|e| e.from == "pkg:npm/a@1.1.0"
+            && e.since_sha == "c2"
+            && e.removed_sha.is_none()));
+        assert_eq!(out.dep_edges.len(), 3);
+
+        // Both versions of `b` are tracked, not just the last one parsed.
+        let live_b: Vec<String> = out
+            .intervals
+            .iter()
+            .filter(|i| i.pkg.name == "b" && i.until.is_none())
+            .map(|i| i.pkg.version.clone())
+            .collect();
+        assert_eq!(live_b.len(), 2, "got {live_b:?}");
+    }
+
     #[test]
     fn replay_derives_intervals() {
         let history = vec![
@@ -575,7 +810,7 @@ mod tests {
             ),
         ];
         let mut warnings = Vec::new();
-        let out = replay_history(history, ScanCaps::default(), &mut warnings);
+        let out = replay_history(history, &mut warnings);
         assert!(warnings.is_empty());
 
         // serde: two intervals (1.0.100 closed at c2, 1.0.200 closed at c3).
@@ -623,7 +858,7 @@ mod tests {
             history_entry("c2", "2024-02-01T00:00:00Z", vec![("Cargo.toml", None)]),
         ];
         let mut warnings = Vec::new();
-        let out = replay_history(history, ScanCaps::default(), &mut warnings);
+        let out = replay_history(history, &mut warnings);
         assert_eq!(out.intervals.len(), 1);
         assert_eq!(
             out.intervals[0]
@@ -643,7 +878,7 @@ mod tests {
             vec![("Cargo.toml", Some(b"\x00\xff garbage".to_vec()))],
         )];
         let mut warnings = Vec::new();
-        let out = replay_history(history, ScanCaps::default(), &mut warnings);
+        let out = replay_history(history, &mut warnings);
         assert!(out.intervals.is_empty());
         assert_eq!(warnings.len(), 1, "one UnparseableManifest warning");
     }
