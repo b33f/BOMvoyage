@@ -55,12 +55,37 @@ pub enum UpdateAction {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum SkillAction {
+    /// Install the self-skill. With no `--agent`, installs for every coding
+    /// agent detected on this machine (by the presence of its config
+    /// directory) in one go.
+    Install {
+        /// The skill to install: `self` (canonical) or `bomvoyage`.
+        /// Passing an agent name here is a hard error — use --agent.
+        #[arg(value_name = "SKILL", default_value = "self")]
+        skill: String,
+        /// Install only for this agent (e.g. `--agent claude-code`);
+        /// supported: claude-code, cursor, windsurf, copilot, antigravity,
+        /// gemini-cli, cline, codex, pi, opencode, junie, kiro
+        #[arg(long, value_name = "AGENT")]
+        agent: Option<String>,
+    },
+    /// Show which agents are detected and whether the skill is installed
+    List,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum Command {
     /// Check for a new release (`update check`) or upgrade in place (`update apply`)
     Update {
         /// What to do
         #[arg(value_enum, default_value = "check")]
         action: UpdateAction,
+    },
+    /// Install this tool's agent skill for coding agents on this machine
+    Skill {
+        #[command(subcommand)]
+        action: SkillAction,
     },
     /// Scan the repo (or refresh an existing graph database)
     Scan {

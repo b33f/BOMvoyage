@@ -106,6 +106,8 @@ bomvoyage export [--db bomvoyage.rl] [--format spdx|cyclonedx|json|csv] [--as-of
 bomvoyage query  [--db bomvoyage.rl] <CYPHER>
 bomvoyage update check                      # is there a newer release?
 bomvoyage update apply                      # upgrade the binary in place
+bomvoyage skill install                     # install the agent skill for every coding agent on this machine
+bomvoyage skill list                        # which agents are detected / installed
 ```
 
 ### Self-update
@@ -121,6 +123,19 @@ Opt out of the automatic check with `--no-update-check` (works on any
 subcommand) or the environment variable `BOMVOYAGE_NO_UPDATE_CHECK=1`
 (`true`/`yes`/`on` also accepted). The explicit `bomvoyage update check` /
 `apply` commands always run regardless.
+
+### Agent skill
+
+`bomvoyage skill install` teaches the coding agents on this machine how to
+drive BOMvoyage: it writes a `SKILL.md` (commands, the temporal graph model,
+ready-to-run Cypher, agent-workflow notes) into every detected agent's skills
+directory — Claude Code, Cursor, Windsurf, Copilot, Antigravity, Gemini CLI,
+Cline, Codex, Pi, OpenCode, Junie and Kiro — detected by the presence of each
+agent's config directory, so one command covers them all. The skill is
+addressable as `self` (canonical) or `bomvoyage`; pass an agent name as the
+positional and it's a hard error — target one explicitly with
+`--agent claude-code` instead. Re-running the install updates the skill to
+match the binary.
 
 `--as-of` accepts an ISO date (`2024-06-01`), an ISO datetime, a commit-sha prefix, or
 `HEAD`. `export` and `query` open the database read-only; a re-scan of an unchanged
