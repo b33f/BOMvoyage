@@ -10,9 +10,10 @@ use clap::Parser;
 use relate::{Database, OpenMode, OpenOptions};
 
 use bomvoyage::cli::{Cli, Command, SkillAction, UpdateAction};
+use bomvoyage::depsdev::DetailedOpts;
 use bomvoyage::error::{ToolError, ToolResult};
 use bomvoyage::graph::SbomGraph;
-use bomvoyage::{export, graph, scan, server, skill, update};
+use bomvoyage::{depsdev, export, graph, scan, server, skill, update};
 
 fn main() {
     let cli = Cli::parse();
@@ -27,6 +28,11 @@ fn main() {
 }
 
 fn run(cli: &Cli) -> ToolResult<()> {
+    // `--more-detailed` is the both-tiers shorthand: it *implies* --detailed
+    // rather than erroring without it. Effective values are derived once, so
+    // every path (demo, scan, serve, detailed) sees the same thing.
+    let detailed = cli.detailed || cli.more_detailed;
+    let vuln_details = cli.vuln_details || cli.more_detailed;
     match &cli.command {
         Some(Command::Update { action }) => match action {
             UpdateAction::Check => update::check_command(),
@@ -38,7 +44,15 @@ fn run(cli: &Cli) -> ToolResult<()> {
             }
             SkillAction::List => skill::list_command(),
         },
-        None => all_in_one(&cli.path, &cli.db, 8334, 5000, cli.no_update_check),
+        None => all_in_one(
+            &cli.path,
+            &cli.db,
+            8334,
+            5000,
+            detailed,
+            vuln_details,
+            cli.no_update_check,
+        ),
         Some(Command::Scan {
             path,
             db,
@@ -46,7 +60,8 @@ fn run(cli: &Cli) -> ToolResult<()> {
             max_commits,
         }) => {
             spawn_daily_update_check(cli.no_update_check);
-            cmd_scan(path, db, *force, *max_commits)
+            warn_vuln_details_without_detailed(detailed, vuln_details);
+            cmd_scan(path, db, *force, *max_commits, detailed, vuln_details)
         }
         Some(Command::Serve {
             path,
@@ -57,7 +72,23 @@ fn run(cli: &Cli) -> ToolResult<()> {
         }) => {
             let db = Arc::new(Database::open(&db.to_string_lossy())?);
             graph::ensure_schema(&db)?;
-            scan_and_serve(path, db, *port, *open, *max_commits, cli.no_update_check)
+            warn_vuln_details_without_detailed(detailed, vuln_details);
+            scan_and_serve(
+                path,
+                db,
+                *port,
+                *open,
+                *max_commits,
+                detailed,
+                vuln_details,
+                cli.no_update_check,
+            )
+        }
+        Some(Command::Detailed { db, refresh }) => {
+            spawn_daily_update_check(cli.no_update_check);
+            // Detailed mode is the subcommand's whole job; --vuln-details is
+            // meaningful on its own here (the global --detailed is ignored).
+            cmd_detailed(db, vuln_details, *refresh)
         }
         Some(Command::Export {
             db,
@@ -98,22 +129,36 @@ fn all_in_one(
     db: &Path,
     port: u16,
     max_commits: u64,
+    detailed: bool,
+    vuln_details: bool,
     no_update_check: bool,
 ) -> ToolResult<()> {
     let db = Arc::new(Database::open(&db.to_string_lossy())?);
     graph::ensure_schema(&db)?;
-    scan_and_serve(path, db, port, true, max_commits, no_update_check)
+    scan_and_serve(
+        path,
+        db,
+        port,
+        true,
+        max_commits,
+        detailed,
+        vuln_details,
+        no_update_check,
+    )
 }
 
 /// Shared serve-path logic: bring the database's CURRENT state up to date
 /// fast (worktree-only, provisional intervals), then walk the git history in
 /// a background thread while the explorer is already being served.
+#[allow(clippy::too_many_arguments)]
 fn scan_and_serve(
     path: &Path,
     db: Arc<Database>,
     port: u16,
     open_browser: bool,
     max_commits: u64,
+    detailed: bool,
+    vuln_details: bool,
     no_update_check: bool,
 ) -> ToolResult<()> {
     // The daily release check: background thread feeding /api/update (the
@@ -142,11 +187,20 @@ fn scan_and_serve(
             out.imports.len()
         );
         graph::write_scan(&db, &out)?;
+        if detailed {
+            run_detailed(&db, vuln_details, false);
+        }
     } else {
         eprintln!(
             "history is current (HEAD {}); serving",
             &head[..head.len().min(12)]
         );
+        // The scan short-circuits on a current HEAD, but detailed mode is
+        // its own pass over the existing graph — a graph scanned without
+        // the flag must still get it now (the cache keeps re-runs cheap).
+        if detailed {
+            run_detailed(&db, vuln_details, false);
+        }
     }
 
     if !history_current {
@@ -165,6 +219,12 @@ fn scan_and_serve(
                     if let Err(e) = graph::write_scan(&bg_db, &out) {
                         eprintln!("background history write failed: {e}");
                         return;
+                    }
+                    // Versions first revealed by the full history walk get
+                    // their detailed data now; the cache makes this pass
+                    // nearly free when the flag ran before serving.
+                    if detailed {
+                        run_detailed(&bg_db, vuln_details, false);
                     }
                     eprintln!(
                         "background: history complete — {} packages across {} commits, time travel ready",
@@ -195,7 +255,14 @@ fn scan_and_serve(
     Ok(())
 }
 
-fn cmd_scan(path: &Path, db: &Path, force: bool, max_commits: u64) -> ToolResult<()> {
+fn cmd_scan(
+    path: &Path,
+    db: &Path,
+    force: bool,
+    max_commits: u64,
+    detailed: bool,
+    vuln_details: bool,
+) -> ToolResult<()> {
     eprintln!("scanning {} …", path.display());
     let caps = scan::ScanCaps {
         max_commits,
@@ -203,13 +270,28 @@ fn cmd_scan(path: &Path, db: &Path, force: bool, max_commits: u64) -> ToolResult
     };
 
     if db.exists() && !force {
-        let existing = SbomGraph::open_read_only(db)?;
-        if let Some(head) = existing.stored_history_head()? {
+        // A .rl bundle holds one open handle at a time: scope the read-only
+        // probe so the writable open below never trips "storage locked".
+        let stored_head = {
+            let existing = SbomGraph::open_read_only(db)?;
+            existing.stored_history_head()?
+        };
+        if let Some(head) = stored_head {
             let current = scan::git::head_sha(path)?;
             if head == current {
                 eprintln!(
-                    "history is current (HEAD {head}); nothing to do (use --force to rescan)"
+                    "history is current (HEAD {head}); nothing to scan (use --force to rescan)"
                 );
+                // The scan short-circuits on a current HEAD, but detailed
+                // mode is its own pass over the existing graph — a graph
+                // scanned without the flag must still get it now (the
+                // cache keeps re-runs cheap).
+                if detailed {
+                    eprintln!("applying detailed mode to the existing graph …");
+                    let graph = SbomGraph::open_writable(db)?;
+                    run_detailed(&graph.db, vuln_details, false);
+                    eprintln!("wrote {}", db.display());
+                }
                 return Ok(());
             }
             eprintln!(
@@ -235,6 +317,42 @@ fn cmd_scan(path: &Path, db: &Path, force: bool, max_commits: u64) -> ToolResult
     let t = std::time::Instant::now();
     graph.write_scan(&out)?;
     eprintln!("  phase: write {:?}", t.elapsed());
+    eprintln!("wrote {}", db.display());
+    if detailed {
+        run_detailed(&graph.db, vuln_details, false);
+    }
+    Ok(())
+}
+
+/// Detailed-mode pass over an already-opened database. Never fails the
+/// calling command — network trouble is warned and counted inside.
+fn run_detailed(db: &Database, vuln_details: bool, refresh: bool) {
+    let opts = DetailedOpts {
+        vuln_details,
+        refresh,
+    };
+    if let Err(e) = depsdev::detailed_graph(db, &opts) {
+        eprintln!("warning: detailed mode failed: {e}");
+    }
+}
+
+/// `--vuln-details` only does something together with `--detailed`.
+fn warn_vuln_details_without_detailed(detailed: bool, vuln_details: bool) {
+    if vuln_details && !detailed {
+        eprintln!("warning: --vuln-details has no effect without --detailed");
+    }
+}
+
+/// `bomvoyage detailed`: add detailed data to an existing graph in place,
+/// no rescan needed.
+fn cmd_detailed(db: &Path, vuln_details: bool, refresh: bool) -> ToolResult<()> {
+    let graph = SbomGraph::open_writable(db)?;
+    let opts = DetailedOpts {
+        vuln_details,
+        refresh,
+    };
+    let stats = depsdev::detailed_graph(&graph.db, &opts)?;
+    eprintln!("{}", stats.summary_line());
     eprintln!("wrote {}", db.display());
     Ok(())
 }

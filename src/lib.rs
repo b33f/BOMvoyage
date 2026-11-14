@@ -3,6 +3,7 @@
 //! UI, export SPDX/CycloneDX as of any point in time.
 
 pub mod cli;
+pub mod depsdev;
 pub mod error;
 pub mod export;
 pub mod graph;

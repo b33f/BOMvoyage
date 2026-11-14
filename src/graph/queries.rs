@@ -8,12 +8,31 @@
 //! ordering-correct for that one format.
 
 /// All DECLARES intervals live at as-of (the SBOM package list).
+///
+/// The detailed-mode columns (vulns/license/depsdev_url/…) are node
+/// properties on version-keyed Package nodes, so the values ride along
+/// correctly at any as_of — a version live in 2023 shows that version's
+/// advisories. Caveat: the data reflects advisories *as known now*, not as
+/// known at the historical instant; version selection is time-correct,
+/// advisory knowledge is not (inherent to a per-version lookup).
 pub const LIVE_PACKAGES: &str = r#"
 MATCH (m:Manifest)-[r:DECLARES]->(p:Package)
 WHERE r.since_date <= $as_of AND (r.removed_date IS NULL OR r.removed_date > $as_of)
 RETURN DISTINCT p.purl AS purl, p.name AS name, p.ecosystem AS ecosystem, p.version AS version,
        p.scope AS scope, r.version_requirement AS requirement, m.path AS manifest,
-       r.added_by_name AS added_by, r.since_sha AS added_sha, r.since_date AS added_date
+       r.added_by_name AS added_by, r.since_sha AS added_sha, r.since_date AS added_date,
+       p.vulns AS vulns, p.license AS license, p.depsdev_url AS depsdev_url,
+       p.homepage AS homepage, p.repository AS repository, p.advisories AS advisories
+ORDER BY purl
+"#;
+
+/// Detailed-mode targets: every versioned package the deps.dev per-version
+/// endpoint can serve. Empty-version packages (manifest-only, unpinned) and
+/// the `pkg:generic/` root node (ecosystem `generic`) are excluded.
+pub const DETAILED_TARGETS: &str = r#"
+MATCH (p:Package)
+WHERE p.ecosystem IN ['python','java','rust','go','node'] AND p.version <> ''
+RETURN DISTINCT p.purl AS purl, p.ecosystem AS eco, p.name AS name, p.version AS version
 ORDER BY purl
 "#;
 

@@ -43,6 +43,24 @@ pub struct Cli {
     /// a day and never blocks.
     #[arg(long, global = true)]
     pub no_update_check: bool,
+
+    /// Detailed mode: fetch per-package data from deps.dev (homepage, repo,
+    /// license, security advisories) and write it onto the graph. Slower —
+    /// one API call per package version. NOTE: this contacts a third-party
+    /// service and reveals the scanned repository's dependency names and
+    /// versions to it. Off by default; see SECURITY.md.
+    #[arg(long, global = true)]
+    pub detailed: bool,
+
+    /// With --detailed: also fetch per-advisory details (severity, summary)
+    /// from the OSV API — one extra call per distinct advisory.
+    #[arg(long, global = true)]
+    pub vuln_details: bool,
+
+    /// Shorthand for `--detailed --vuln-details`: full detailed mode with
+    /// per-advisory severity and summaries. Implies --detailed.
+    #[arg(long, global = true)]
+    pub more_detailed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -119,6 +137,16 @@ pub enum Command {
         /// Cap on commits walked (used when a scan is needed)
         #[arg(long, value_name = "N", default_value_t = 5000)]
         max_commits: u64,
+    },
+    /// Add detailed data (deps.dev links, license, security advisories) to
+    /// an existing graph database in place, without rescanning
+    Detailed {
+        /// Graph database file (Relate .rl bundle)
+        #[arg(long, short, value_name = "FILE", default_value = "bomvoyage.rl")]
+        db: std::path::PathBuf,
+        /// Re-fetch even for already-detailed packages (busts the local cache)
+        #[arg(long)]
+        refresh: bool,
     },
     /// Export the SBOM (optionally as of a past commit or date)
     Export {

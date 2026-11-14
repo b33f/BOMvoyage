@@ -88,7 +88,8 @@ impl Api {
         self.db.connect().map_err(rel_io)
     }
 
-    fn meta(&self) -> std::io::Result<serde_json::Value> {
+    /// `GET /api/meta` — public for the integration tests too.
+    pub fn meta(&self) -> std::io::Result<serde_json::Value> {
         let mut conn = self.connect()?;
         let result = conn.query(queries::META).map_err(rel_io)?;
         let head_sha = cell(&result, 0, "head_sha");
@@ -133,6 +134,22 @@ impl Api {
             })
             .unwrap_or(0);
 
+        // Detailed-mode marker: how many packages carry deps.dev data. The
+        // UI only offers the vulnerable-dependencies console preset when
+        // this is > 0.
+        let detailed = conn
+            .query("MATCH (p:Package) WHERE p.depsdev_status IS NOT NULL RETURN count(p) AS n")
+            .map_err(rel_io)?;
+        let detailed_packages = detailed
+            .rows
+            .first()
+            .and_then(|r| r.first())
+            .and_then(|v| match v {
+                Value::Int(i) => Some(*i),
+                _ => None,
+            })
+            .unwrap_or(0);
+
         Ok(serde_json::json!({
             "name": self.repo_name,
             "head_sha": head_sha,
@@ -140,6 +157,7 @@ impl Api {
             "scan_quality": scan_quality,
             "history_current": history_current,
             "total_packages": total_packages,
+            "detailed_packages": detailed_packages,
             "ecosystems": ecosystems,
         }))
     }
@@ -169,11 +187,33 @@ impl Api {
                 .and_then(|v| v.as_string().map(str::to_string))
                 .unwrap_or_default()
         };
+        let pick_int = |row: &[Value], i: Option<usize>| -> i64 {
+            i.and_then(|i| row.get(i))
+                .and_then(|v| {
+                    if let Value::Int(n) = v {
+                        Some(*n)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0)
+        };
 
         let nodes: Vec<serde_json::Value> = pkgs
             .rows
             .iter()
             .map(|row| {
+                // Detailed-mode columns (absent on undetailed graphs →
+                // empty/0). The advisories JSON string is parsed server-side
+                // into a real array only when there is something in it, so
+                // the payload only grows for vulnerable packages.
+                let vulns = pick_int(row, col(&pkgs, "vulns"));
+                let advisories_raw = pick(row, col(&pkgs, "advisories"));
+                let advisories: serde_json::Value = if vulns > 0 && !advisories_raw.is_empty() {
+                    serde_json::from_str(&advisories_raw).unwrap_or(serde_json::Value::Null)
+                } else {
+                    serde_json::Value::Null
+                };
                 serde_json::json!({
                     "data": {
                         "id": pick(row, col(&pkgs, "purl")),
@@ -184,6 +224,12 @@ impl Api {
                         "added_by": pick(row, col(&pkgs, "added_by")),
                         "added_date": pick(row, col(&pkgs, "added_date")),
                         "requirement": pick(row, col(&pkgs, "requirement")),
+                        "vulns": vulns,
+                        "license": pick(row, col(&pkgs, "license")),
+                        "depsdev_url": pick(row, col(&pkgs, "depsdev_url")),
+                        "homepage": pick(row, col(&pkgs, "homepage")),
+                        "repository": pick(row, col(&pkgs, "repository")),
+                        "advisories": advisories,
                     }
                 })
             })
@@ -375,6 +421,17 @@ fn graph_elements_of(result: &relate::QueryResult) -> serde_json::Value {
                 "ecosystem": if kind == "Package" { prop("ecosystem") } else { None },
                 "scope": prop("scope"),
                 "purl": prop("purl"),
+                // Top-level so the `node[vulns > 0]` style (red triangle)
+                // applies to query-drawn packages too, not just the main view.
+                "vulns": if kind == "Package" {
+                    serde_json::json!(n
+                        .properties
+                        .get("vulns")
+                        .and_then(|v| if let Value::Int(i) = v { Some(*i) } else { None })
+                        .unwrap_or(0))
+                } else {
+                    serde_json::Value::Null
+                },
                 "props": props_json(&n.properties),
             }
         })

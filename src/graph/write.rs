@@ -72,6 +72,19 @@ MERGE (p:Package {purl: row.purl})
 SET p.name = row.name, p.ecosystem = row.eco, p.version = row.version, p.scope = row.scope
 "#;
 
+/// Detailed-mode (deps.dev) Package properties. MATCH on purl only — it
+/// never touches the scan-written properties, and SET is idempotent, so a
+/// detailed run is re-runnable and its properties survive rescans (which
+/// MERGE Package nodes without clearing unknown properties).
+pub const MERGE_PACKAGE_DETAILED: &str = r#"
+UNWIND $rows AS row
+MATCH (p:Package {purl: row.purl})
+SET p.depsdev_url = row.depsdev_url, p.depsdev_status = row.depsdev_status,
+    p.depsdev_fetched_at = row.fetched_at, p.homepage = row.homepage,
+    p.repository = row.repository, p.license = row.license, p.vulns = row.vulns,
+    p.advisories = row.advisories, p.deprecated = row.deprecated
+"#;
+
 pub fn package_rows(packages: &[super::super::scan::PkgRef]) -> Vec<Row> {
     packages
         .iter()

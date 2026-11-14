@@ -83,7 +83,10 @@ struct State {
     latest: String,
 }
 
-fn state_path() -> Option<PathBuf> {
+/// The shared per-user cache directory (`~/.cache/bomvoyage`, or the
+/// Windows `%LOCALAPPDATA%` equivalent), if the environment defines one.
+/// Shared by the update-check state file and the detailed-mode caches.
+pub(crate) fn cache_dir() -> Option<PathBuf> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()?;
@@ -102,8 +105,14 @@ fn state_path() -> Option<PathBuf> {
         p.push(".cache");
     }
     p.push("bomvoyage");
-    p.push("update-check.json");
     Some(p)
+}
+
+fn state_path() -> Option<PathBuf> {
+    cache_dir().map(|mut p| {
+        p.push("update-check.json");
+        p
+    })
 }
 
 fn read_state() -> Option<State> {

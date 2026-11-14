@@ -10,6 +10,11 @@ const ECOSYSTEM_COLORS = {
   generic: "#8b949e",
 };
 
+/// Packages are green; vulnerable ones (detailed mode) break out as red
+/// triangles. The scheme is the same in every mode — a vulnerable package
+/// is always the one non-green shape on the canvas.
+const PACKAGE_GREEN = "#3fb950";
+
 /// Node kinds a query can return, with their canvas look. Package nodes are
 /// coloured by ecosystem instead.
 const KIND_STYLES = {
@@ -35,6 +40,7 @@ let selectedDate = null;     // explicit calendar pick (yyyy-mm-dd)
 let calMonth = null;         // month the calendar popover is showing
 let playing = false;         // autoplay sweep running?
 let playTimer = null;        // pending next-step timeout of the sweep
+let detailedPackages = 0;    // packages carrying deps.dev data (from /api/meta)
 const DIRECT_ONLY_THRESHOLD = 20;
 
 const $ = (id) => document.getElementById(id);
@@ -151,7 +157,9 @@ function buildViewElements(elements) {
 function nodeColor(n) {
   const kind = n.data("kind");
   if (kind && KIND_STYLES[kind]) return KIND_STYLES[kind].color;
-  return ECOSYSTEM_COLORS[n.data("ecosystem")] || ECOSYSTEM_COLORS.generic;
+  // Uniform green for packages (the vulnerable selector overrides to red
+  // triangles after this in CY_STYLE).
+  return PACKAGE_GREEN;
 }
 
 const CY_STYLE = [
@@ -175,6 +183,20 @@ const CY_STYLE = [
     },
   },
   { selector: "node[scope = 'transitive']", style: { width: 12, height: 12 } },
+  // Detailed mode: packages whose deps.dev data reports security advisories
+  // break the ecosystem color/shape scheme deliberately — red triangles are
+  // the one thing you should spot from across the room. Placed after the
+  // entries above so it wins on color and size; `vulns` only exists on
+  // Package nodes, so query-result kind shapes are unaffected.
+  {
+    selector: "node[vulns > 0]",
+    style: {
+      shape: "triangle",
+      "background-color": "#f85149",
+      width: 16,
+      height: 16,
+    },
+  },
   {
     selector: "node[type = 'dev'], node[type = 'area']",
     style: {
@@ -408,6 +430,7 @@ function renderLegend() {
   const legend = $("legend");
   if (!cy) return;
   const items = new Map();
+  let vulnCount = 0;
   cy.nodes().forEach((n) => {
     const kind = n.data("kind");
     const type = n.data("type");
@@ -418,14 +441,27 @@ function renderLegend() {
       key = kind; label = kind; color = KIND_STYLES[kind].color; cls = KIND_STYLES[kind].legend;
     } else if (!kind || kind === "Package") {
       const eco = n.data("ecosystem");
-      if (!eco) { if (kind) { key = "Package"; label = "Package"; color = ECOSYSTEM_COLORS.generic; } else return; }
-      else { key = "eco:" + eco; label = eco; color = ECOSYSTEM_COLORS[eco] || ECOSYSTEM_COLORS.generic; }
+      if (!eco) {
+        if (kind) {
+          key = "Package"; label = "Package"; color = ECOSYSTEM_COLORS.generic;
+        } else return;
+      } else {
+        // One green entry for all packages — nodes are uniform green, so
+        // per-ecosystem legend colors would show hues nothing carries.
+        key = "dep"; label = "dependency"; color = PACKAGE_GREEN;
+      }
     } else {
       key = kind; label = kind; color = ECOSYSTEM_COLORS.generic;
     }
+    if ((n.data("vulns") || 0) > 0) vulnCount++;
     if (key && !items.has(key)) items.set(key, { label, color, cls, count: 0 });
     if (key) items.get(key).count++;
   });
+  // The vulnerable entry goes last, on a shape of its own — the legend
+  // teaches the red triangle in one glance.
+  if (vulnCount > 0) {
+    items.set("vulnerable", { label: "vulnerable", color: "#f85149", cls: "tri", count: vulnCount });
+  }
   legend.innerHTML = [...items.values()]
     .map((i) => `<span><i class="${i.cls}" style="background:${i.color}"></i>${escapeHtml(i.label)} <b class="muted">${i.count}</b></span>`)
     .join("");
@@ -525,6 +561,33 @@ function setInspectorTitle(t) {
   $("inspector-title").textContent = t;
 }
 
+/// Detailed-mode data for a package node, straight from the canvas (the
+/// /api/graph payload already carries it — no extra fetch). Null for nodes
+/// that aren't detailed (flag off) or aren't on the canvas.
+function detailedFor(purl) {
+  if (!cy) return null;
+  const n = cy.getElementById(purl);
+  return n.nonempty() ? n.data() : null;
+}
+
+/// Hostname of a URL for link labels; the raw URL as fallback for
+/// anything the URL parser can't chew.
+function hostnameOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+function severityClass(sev) {
+  const s = String(sev || "").toUpperCase();
+  if (s === "CRITICAL" || s === "HIGH") return "sev-high";
+  if (s === "MODERATE" || s === "MEDIUM") return "sev-medium";
+  if (s === "LOW") return "sev-low";
+  return "sev-unknown";
+}
+
 async function showPackage(purl, asOfOverride) {
   selectedPackage = purl;
   setInspectorTitle("Package");
@@ -546,6 +609,26 @@ async function showPackage(purl, asOfOverride) {
     const purlType = (purl.match(/^pkg:([^/]+)\//) || [])[1];
     const eco = { pypi: "python", maven: "java", cargo: "rust", golang: "go", npm: "node" }[purlType] || purlType;
 
+    // Detailed-mode data lives on the node (per-version): license, links,
+    // advisories. Advisory knowledge is as-known-now, but the version —
+    // and therefore the advisory set — follows the timeline correctly.
+    const det = detailedFor(purl) || {};
+    const vulns = det.vulns || 0;
+    const advisories = Array.isArray(det.advisories) ? det.advisories : [];
+    const links = [];
+    if (det.depsdev_url) links.push(`<a href="${escapeHtml(det.depsdev_url)}" target="_blank" rel="noreferrer">deps.dev</a>`);
+    if (det.homepage) links.push(`<a href="${escapeHtml(det.homepage)}" target="_blank" rel="noreferrer">${escapeHtml(hostnameOf(det.homepage))}</a>`);
+    if (det.repository) links.push(`<a href="${escapeHtml(det.repository)}" target="_blank" rel="noreferrer">${escapeHtml(hostnameOf(det.repository))}</a>`);
+    const advisoryItems = advisories
+      .map((a) => {
+        if (!a || !a.id) return "";
+        const alias = Array.isArray(a.aliases) && a.aliases.length ? ` <span class="muted">(${escapeHtml(a.aliases.join(", "))})</span>` : "";
+        const sev = a.severity ? `<span class="sev ${severityClass(a.severity)}">${escapeHtml(String(a.severity).toUpperCase())}</span>` : "";
+        const summary = a.summary ? `<span class="summary">${escapeHtml(a.summary)}</span>` : "";
+        return `<li><a href="https://osv.dev/vulnerability/${encodeURIComponent(a.id)}" target="_blank" rel="noreferrer"><code>${escapeHtml(a.id)}</code></a>${alias}${sev}${summary}</li>`;
+      })
+      .join("");
+
     const timeline = rows
       .map((r) => {
         const live = !r.removed_date;
@@ -561,12 +644,17 @@ async function showPackage(purl, asOfOverride) {
       <div class="insp-sub">
         ${eco ? `<span class="badge"><span class="swatch" style="background:${ECOSYSTEM_COLORS[eco] || ECOSYSTEM_COLORS.generic}"></span>${escapeHtml(eco)}</span>` : ""}
         ${current.length ? '<span class="badge">in use</span>' : '<span class="badge">not declared</span>'}
+        ${det.license ? `<span class="badge" title="License">${escapeHtml(det.license)}</span>` : ""}
+        ${det.deprecated ? '<span class="badge">deprecated</span>' : ""}
+        ${vulns > 0 ? `<span class="badge vuln">${vulns} advers${vulns === 1 ? "y" : "ies"}</span>` : ""}
       </div>
       <dl>
         <dt>Package URL</dt><dd class="mono">${escapeHtml(purl)}</dd>
         <dt>Requirement</dt><dd><code>${escapeHtml(latest.requirement || "?")}</code> in <code>${escapeHtml(latest.manifest || "?")}</code></dd>
         <dt>Added by</dt><dd>${escapeHtml(latest.added_by_name || "?")} <span class="muted">${escapeHtml(latest.added_by_email || "")}</span><br><span class="muted">${fmtDate(latest.added_date)}</span></dd>
         <dt>Version timeline</dt><dd><ul class="timeline">${timeline || "<li>no history</li>"}</ul></dd>
+        ${links.length ? `<dt>Links</dt><dd class="links">${links.join(" · ")}</dd>` : ""}
+        ${advisoryItems ? `<dt>Security advisories</dt><dd><ul class="advisory">${advisoryItems}</ul></dd>` : ""}
         <dt>Used in ${usages.length} file${usages.length === 1 ? "" : "s"}</dt>
         <dd><ul class="files">${usages.map((u) => `<li><code>${escapeHtml(u.file)}</code><em>${escapeHtml(u.symbol)}</em></li>`).join("") || '<li class="muted">No usage sites found</li>'}</ul></dd>
       </dl>`;
@@ -587,7 +675,8 @@ function showGroupDeps(kind, label, node) {
   const items = kids
     .map((k) => {
       const d = k.data();
-      const swatch = ECOSYSTEM_COLORS[d.ecosystem] || ECOSYSTEM_COLORS.generic;
+      // Match the canvas: packages are uniform green.
+      const swatch = PACKAGE_GREEN;
       return `<li><a data-purl="${escapeHtml(d.id)}" href="#"><i class="swatch" style="background:${swatch}"></i>${escapeHtml(d.label)}</a></li>`;
     })
     .join("");
@@ -647,6 +736,7 @@ function escapeHtml(s) {
 
 async function init() {
   const meta = await fetchJson("/api/meta");
+  detailedPackages = meta.detailed_packages || 0;
   const badges = (meta.ecosystems || [])
     .map((e) => `<span class="badge"><span class="swatch" style="background:${ECOSYSTEM_COLORS[e.ecosystem] || ECOSYSTEM_COLORS.generic}"></span>${escapeHtml(e.ecosystem)} · ${e.names}</span>`)
     .join("");
@@ -772,6 +862,10 @@ function pollHistoryStatus(current) {
   const timer = setInterval(async () => {
     try {
       const meta = await fetchJson("/api/meta");
+      if (meta.detailed_packages) {
+        detailedPackages = meta.detailed_packages;
+        addVulnerablePreset();
+      }
       if (meta.history_current) {
         clearInterval(timer);
         badge.remove();
@@ -972,19 +1066,65 @@ const CYPHER_PRESETS = [
   },
 ];
 
-function wireCypherConsole() {
+/// Detailed-mode-only preset, appended when the graph carries deps.dev
+/// data: every dependency with advisories at the slider's point in time,
+/// linked to the developer who put that version there. Attribution rides
+/// the ADDED edge opened by the same commit the live DECLARES interval
+/// starts at, so time travel shows only attribution that had happened by
+/// then. On an undetailed graph `p.vulns > 0` matches nothing.
+const VULNERABLE_PRESET = {
+  name: "Vulnerable deps + who added them",
+  cypher:
+    "MATCH (m:Manifest)-[r:DECLARES]->(p:Package)\n" +
+    "WHERE p.vulns > 0\n" +
+    "  AND r.since_date <= $as_of\n" +
+    "  AND (r.removed_date IS NULL OR r.removed_date > $as_of)\n" +
+    "MATCH (x:Person)-[a:ADDED]->(p)\n" +
+    "WHERE a.at_sha = r.since_sha\n" +
+    "RETURN x, a, p LIMIT 200",
+};
+
+let vulnerablePresetWired = false;
+
+function presetButton(preset) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.title = preset.table ? "Table result" : "Draws on the canvas";
+  btn.innerHTML = `<i class="${preset.table ? "tbl" : ""}"></i>${escapeHtml(preset.name)}`;
+  btn.addEventListener("click", () => {
+    $("cypher-input").value = preset.cypher;
+    runCypher();
+  });
+  return btn;
+}
+
+/// The preset buttons are always a pure function of CYPHER_PRESETS —
+/// rendered from scratch, so no call path can ever duplicate one.
+function renderPresets() {
   const holder = $("cypher-presets");
+  holder.innerHTML = "";
   for (const preset of CYPHER_PRESETS) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.title = preset.table ? "Table result" : "Draws on the canvas";
-    btn.innerHTML = `<i class="${preset.table ? "tbl" : ""}"></i>${escapeHtml(preset.name)}`;
-    btn.addEventListener("click", () => {
-      $("cypher-input").value = preset.cypher;
-      runCypher();
-    });
-    holder.appendChild(btn);
+    holder.appendChild(presetButton(preset));
   }
+}
+
+/// Offer the vulnerable-dependencies preset once — and at any time: a
+/// `serve --detailed` graph only gains its deps.dev data when the
+/// background history walk finishes, possibly after this page loaded.
+function addVulnerablePreset() {
+  if (vulnerablePresetWired || detailedPackages <= 0) return;
+  vulnerablePresetWired = true;
+  const firstTable = CYPHER_PRESETS.findIndex((p) => p.table);
+  const at = firstTable === -1 ? CYPHER_PRESETS.length : firstTable;
+  CYPHER_PRESETS.splice(at, 0, VULNERABLE_PRESET);
+  // Before the console is built there is nothing to re-render — the
+  // wiring loop picks the preset up from the array itself.
+  if ($("cypher-presets").children.length > 0) renderPresets();
+}
+
+function wireCypherConsole() {
+  addVulnerablePreset();
+  renderPresets();
   $("run-cypher").addEventListener("click", () => runCypher());
   $("cypher-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {

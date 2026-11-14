@@ -76,3 +76,79 @@ fn route(stream: &mut TcpStream, req: &Request, api: &Api) -> std::io::Result<()
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The embedded UI is hand-rolled JS with no build step or bundler, so a
+    /// syntax error ships silently and blanks the explorer (a premature
+    /// array close once did exactly that — empty UI, stuck on "Loading…").
+    /// When `node` is available, parse-check every embedded script exactly
+    /// as a browser would. CI runners always have node; a machine without
+    /// one skips rather than fails.
+    #[test]
+    fn embedded_ui_scripts_parse() {
+        let node = match std::process::Command::new("node").arg("--version").output() {
+            Ok(out) if out.status.success() => "node".to_string(),
+            _ => {
+                eprintln!("node not available — skipping UI parse check");
+                return;
+            }
+        };
+        for (name, source) in [("app.js", APP_JS), ("search.js", SEARCH_JS)] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = dir.path().join(name);
+            std::fs::write(&path, source).expect("write script");
+            let out = std::process::Command::new(&node)
+                .arg("--check")
+                .arg(&path)
+                .output()
+                .expect("node runs");
+            assert!(
+                out.status.success(),
+                "embedded {name} has a syntax error:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
+    /// The static UI must stay wired to the server: every script/style the
+    /// page loads must be among the embedded, routed files.
+    #[test]
+    fn index_references_only_embedded_assets() {
+        for src in ["/app.js", "/search.js", "/style.css", "/cytoscape.min.js"] {
+            assert!(
+                INDEX_HTML.contains(src.trim_start_matches('/')),
+                "index.html references {src} but the check didn't find it"
+            );
+        }
+    }
+
+    /// Behavior, not just syntax: run the real app.js in node against a
+    /// stubbed DOM + fetch and assert the wiring — most notably that the
+    /// detailed-mode vulnerable-deps console preset exists exactly once
+    /// (a double-insert once shipped: the preset was both spliced into the
+    /// array and button-injected, and the wiring loop appended it again).
+    #[test]
+    fn embedded_ui_wiring_smoke() {
+        let node = match std::process::Command::new("node").arg("--version").output() {
+            Ok(out) if out.status.success() => "node".to_string(),
+            _ => {
+                eprintln!("node not available — skipping UI wiring smoke");
+                return;
+            }
+        };
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ui_smoke.mjs");
+        let out = std::process::Command::new(&node)
+            .arg(&script)
+            .output()
+            .expect("node runs");
+        assert!(
+            out.status.success(),
+            "embedded UI wiring smoke failed:\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
