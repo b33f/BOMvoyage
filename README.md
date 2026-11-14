@@ -300,6 +300,11 @@ See [SECURITY.md](SECURITY.md) for how to report a vulnerability and what the
 tool's security model is (local-only binding, read-only Cypher enforcement,
 treats repository content as untrusted data).
 
+Supply-chain gates on every PR: cargo-deny (RustSec advisories including
+known-malicious crates, crates.io-only sources, permissive licenses,
+checksummed-lockfile guards) and the Socket Security App (zero-day malicious
+dependency heuristics) — both must pass to merge.
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
