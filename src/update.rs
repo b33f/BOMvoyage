@@ -223,8 +223,7 @@ fn fetch_latest() -> ToolResult<UpdateInfo> {
 pub fn daily_check() {
     let do_check = || -> Option<UpdateInfo> {
         if let Some(state) = read_state() {
-            let fresh = now_secs().saturating_sub(state.checked_at_secs) < CHECK_INTERVAL_SECS;
-            if fresh {
+            if is_fresh(state.checked_at_secs, now_secs()) {
                 return update_if_newer(&state.latest);
             }
         }
@@ -240,6 +239,12 @@ pub fn daily_check() {
         }
     };
     record(do_check());
+}
+
+/// A cached check is trusted for one day, not a second longer — at exactly
+/// 24h it goes stale and the next run re-queries.
+fn is_fresh(checked_at_secs: u64, now_secs: u64) -> bool {
+    now_secs.saturating_sub(checked_at_secs) < CHECK_INTERVAL_SECS
 }
 
 fn update_if_newer(latest: &str) -> Option<UpdateInfo> {
@@ -682,6 +687,83 @@ mod tests {
             resolve_redirect("https://github.com/a", "rel/path"),
             "https://github.com/rel/path"
         );
+        // a protocol-relative Location cannot escape the allowlisted host:
+        // it joins as a *path* on the origin, not as a new authority
+        assert_eq!(
+            resolve_redirect("https://api.github.com/x", "//evil.example.com/y"),
+            "https://api.github.com//evil.example.com/y"
+        );
+        assert!(allowlisted(&resolve_redirect(
+            "https://api.github.com/x",
+            "//evil.example.com/y"
+        )));
+    }
+
+    #[test]
+    fn checksum_verification() {
+        let archive = b"archive-bytes";
+        let digest = hex(&Sha256::digest(archive));
+        // matching checksum, standard "<hash>  <name>" line
+        let ok = format!("{digest}  bomvoyage-1.tar.gz\n");
+        assert!(verify_sha256(archive, ok.as_bytes(), "bomvoyage-1.tar.gz").is_ok());
+        // uppercase hex in the checksum file is accepted
+        let upper = format!("{}  bomvoyage-1.tar.gz", digest.to_uppercase());
+        assert!(verify_sha256(archive, upper.as_bytes(), "bomvoyage-1.tar.gz").is_ok());
+        // checksum asset written from a different cwd (full path in the file)
+        let pathy = format!("{digest}  /some/dir/bomvoyage-1.tar.gz");
+        assert!(verify_sha256(archive, pathy.as_bytes(), "bomvoyage-1.tar.gz").is_ok());
+        // mismatch → refuse
+        let wrong = format!("{}  bomvoyage-1.tar.gz", hex(&Sha256::digest(b"other")));
+        let err = verify_sha256(archive, wrong.as_bytes(), "bomvoyage-1.tar.gz")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("checksum mismatch"), "{err}");
+        // wrong filename / unparsable / non-utf8 → refuse
+        assert!(verify_sha256(
+            archive,
+            ok.replace("1.tar.gz", "2.zip").as_bytes(),
+            "bomvoyage-1.tar.gz"
+        )
+        .is_err());
+        assert!(verify_sha256(archive, b"garbage", "bomvoyage-1.tar.gz").is_err());
+        assert!(verify_sha256(archive, &[0xff, 0xfe], "bomvoyage-1.tar.gz").is_err());
+    }
+
+    #[test]
+    fn sha256_known_vector() {
+        assert_eq!(
+            hex(&Sha256::digest(b"")),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn version_more_edges() {
+        // missing parts mean zero: 1.0 == 1.0.0
+        assert!(!version_is_newer("1.0", "1.0.0"));
+        assert!(!version_is_newer("1.0.0", "1.0"));
+        // four parts
+        assert!(version_is_newer("1.2.3.4", "1.2.3.3"));
+        assert!(!version_is_newer("1.2.3.4", "1.2.3.4"));
+        // pre-release of the same number is never "newer"
+        assert!(!version_is_newer("0.2.0-rc1", "0.2.0"));
+        assert!(!version_is_newer("0.2.0-rc.2", "0.2.0-rc.2"));
+        // whitespace and v-prefix tolerance
+        assert!(version_is_newer("  v1.1.0 ", "1.0.9"));
+        // numeric compare, not lexicographic: 2 < 10
+        assert!(version_is_newer("0.1.10", "0.1.9"));
+        assert!(!version_is_newer("0.1.9", "0.1.10"));
+    }
+
+    #[test]
+    fn daily_check_freshness_window() {
+        let day = CHECK_INTERVAL_SECS;
+        assert!(is_fresh(0, day - 1), "just inside 24h is fresh");
+        assert!(!is_fresh(0, day), "exactly 24h is stale");
+        assert!(!is_fresh(0, day + 1));
+        assert!(is_fresh(10_000, 10_000), "same instant is fresh");
+        // a clock that went backwards never trips saturating_sub into panic
+        assert!(is_fresh(day + 5, 10));
     }
 
     #[test]

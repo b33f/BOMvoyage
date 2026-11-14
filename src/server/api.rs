@@ -575,3 +575,41 @@ fn version_suffix(version: &str) -> String {
 fn rel_io<E: std::fmt::Display>(e: E) -> std::io::Error {
     std::io::Error::other(e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_decode_percent_plus_and_multibyte() {
+        assert_eq!(url_decode("plain"), "plain");
+        assert_eq!(url_decode("pkg%3Acargo%2Fserde"), "pkg:cargo/serde");
+        assert_eq!(url_decode("a+b"), "a b"); // form-style space
+        assert_eq!(
+            url_decode("2024-06-01T00%3A00%3A00Z"),
+            "2024-06-01T00:00:00Z"
+        );
+        // multibyte UTF-8 survives
+        assert_eq!(url_decode("%C3%A9t%C3%A9"), "été");
+        // malformed escapes pass through literally, never panic
+        assert_eq!(url_decode("100%"), "100%");
+        assert_eq!(url_decode("%ZZ"), "%ZZ");
+        assert_eq!(url_decode("%A"), "%A");
+    }
+
+    #[test]
+    fn query_param_takes_first_value() {
+        fn req(query: &str) -> Request {
+            Request {
+                method: "GET".into(),
+                path: "/api/x".into(),
+                query: query.to_string(),
+                body: Vec::new(),
+            }
+        }
+        assert_eq!(qp(&req("name=serde"), "name").as_deref(), Some("serde"));
+        assert_eq!(qp(&req("name=a&name=b"), "name").as_deref(), Some("a"));
+        assert_eq!(qp(&req("other=1"), "name"), None);
+        assert_eq!(qp(&req(""), "name"), None);
+    }
+}
