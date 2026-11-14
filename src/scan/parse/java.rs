@@ -30,7 +30,7 @@ pub fn parse_pom(text: &str) -> Result<Vec<PkgRef>, String> {
         use quick_xml::events::Event;
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 if name == "dependency" {
                     in_dependency = true;
                     current = Some((String::new(), String::new(), String::new()));
@@ -40,7 +40,10 @@ pub fn parse_pom(text: &str) -> Result<Vec<PkgRef>, String> {
             }
             Ok(Event::Text(t)) => {
                 if in_dependency {
-                    let text = t.unescape().map_err(|e| e.to_string())?.trim().to_string();
+                    let text = quick_xml::escape::unescape(&t)
+                        .map_err(|e| e.to_string())?
+                        .trim()
+                        .to_string();
                     if let Some(cur) = current.as_mut() {
                         if let Some(tag) = stack.last() {
                             match tag.as_str() {
@@ -54,7 +57,7 @@ pub fn parse_pom(text: &str) -> Result<Vec<PkgRef>, String> {
                 }
             }
             Ok(Event::End(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 if name == "dependency" && in_dependency {
                     in_dependency = false;
                     if let Some((g, a, v)) = current.take() {
