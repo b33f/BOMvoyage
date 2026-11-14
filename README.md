@@ -1,5 +1,7 @@
 # BOMvoyage
 
+[![CI](https://github.com/b33f/BOMvoyage/actions/workflows/ci.yml/badge.svg)](https://github.com/b33f/BOMvoyage/actions/workflows/ci.yml)
+
 **A temporal SBOM (Software Bill of Materials) generator and explorer — every dependency
 has a story: who added it, when, and how it evolved.**
 
@@ -11,33 +13,43 @@ Run it inside a git repository and it:
 
 1. **Scans every dependency manifest** — Python (`requirements*.txt`, `pyproject.toml`,
    `poetry.lock`, `uv.lock`), Java (`pom.xml`, Gradle, `gradle.lockfile`), Rust
-   (`Cargo.toml`, `Cargo.lock`), Go (`go.mod`, `go.sum`).
+   (`Cargo.toml`, `Cargo.lock`), Go (`go.mod`, `go.sum`), Node.js / TypeScript /
+   JavaScript (`package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`
+   classic and Berry, `pnpm-lock.yaml` v5–v9).
 2. **Walks the full git history** of those manifests and replays it, deriving for every
    dependency: **who added it, when, every version bump, and when it was removed** —
    stored as occupancy intervals on graph edges.
 3. **Maps usage sites**: which files import / call each dependency.
 4. **Builds the dependency graph** — direct and transitive (full pkg→pkg edges from
-   `Cargo.lock`; module topology from `go.mod`; flat lockfiles are honestly marked
+   `Cargo.lock` and the npm / yarn / pnpm lockfiles; module topology from `go.mod`; flat lockfiles are honestly marked
    `flat`, never faked into wrong edges).
 5. Writes it all to **one portable `.rl` file** (RelateDB's Parquet snapshot + WAL
    bundle), then serves an **interactive web UI with time travel**.
 
 ## Quick start (the demo)
 
+Download a prebuilt binary from [Releases](https://github.com/b33f/BOMvoyage/releases)
+(macOS Apple-silicon & Intel, Linux x86_64, Windows x86_64 — each archive ships a
+SHA-256 checksum), unpack it, and:
+
 ```console
 $ cd some-git-repo
-$ bomvoyage
+$ bomvoyage          # or ./bomvoyage-v0.1.0-… from the unpacked archive
 scanning /some-git-repo …
 412 packages across 87 commits, 634 dependency events, 1502 usage sites
 wrote bomvoyage.rl
 BOMvoyage explorer: http://localhost:8334   # opened in your browser automatically
 ```
 
+Or build from source (see [Building](#building)).
+
 Running with no options scans and opens the browser at `http://localhost:8334` on its own.
 Open the URL: an interactive dependency graph with a **time-travel slider** — drag it
 back to any commit and watch the SBOM shrink to what the repo depended on that day.
+The sweep controls (⏮ ▶ ⏸) play the whole history day by day as an animation.
 Click any package to see **who added it, when, its full version timeline, and every
-file that uses it**. The raw-Cypher box at the bottom shows the temporal query behind
+file that uses it**; click a developer or repo-area hub to list the dependencies
+attributed to it. The raw-Cypher box at the bottom shows the temporal query behind
 the view you're looking at.
 
 ## Why a graph, and why embedded
@@ -110,7 +122,7 @@ $ bomvoyage query --db bomvoyage.rl "MATCH (m:Manifest)-[r:DECLARES]->(p:Package
   `git log` invocation, byte-capped stdout, malformed records are errors.
 - **No web framework**: the HTTP layer is hand-rolled over `std::net` and the UI
   (cytoscape.js) is embedded in the binary — fully offline, nothing to install.
-- **Bounded by construction**: commit caps, 4 MiB manifest caps, file-count caps;
+- **Bounded by construction**: commit caps, 64 MiB manifest caps, usage-scan file caps;
   hitting a cap warns loudly instead of truncating silently.
 
 ## Building
@@ -207,3 +219,18 @@ archive, or `scp` to a colleague.
 $ cargo test                 # parser fixtures, interval replay, end-to-end git
                              # history → as-of queries, idempotent rescan
 ```
+
+CI builds and tests every commit on **Linux, macOS and Windows** and runs the
+lint checks (`cargo fmt`, `cargo clippy -D warnings`); a push of a `v*` tag
+(e.g. `v0.1.0`) builds release binaries for all four targets and publishes them
+as a GitHub release with SHA-256 checksums.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for how to report a vulnerability and what the
+tool's security model is (local-only binding, read-only Cypher enforcement,
+treats repository content as untrusted data).
+
+## License
+
+Apache-2.0 — see [LICENSE](LICENSE).
