@@ -17,7 +17,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 httparse = "1"
-toml = "0.8"
+toml = "1.2"
 quick-xml = "0.42"
 # self-update: GitHub release check + verified in-place binary upgrade
 ureq = { version = "2", features = ["json"] }
