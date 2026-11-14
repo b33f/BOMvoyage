@@ -5,6 +5,7 @@
 pub mod cargo;
 pub mod gomod;
 pub mod java;
+pub mod npm;
 pub mod python;
 
 use super::{ManifestKind, PkgRef, Scope};
@@ -28,6 +29,10 @@ pub fn parse_manifest(
         ManifestKind::PomXml => java::parse_pom(text),
         ManifestKind::Gradle => java::parse_gradle(text),
         ManifestKind::GradleLockfile => java::parse_gradle_lockfile(text),
+        ManifestKind::PackageJson => npm::parse_package_json(text),
+        ManifestKind::PackageLock => npm::parse_package_lock(text),
+        ManifestKind::YarnLock => npm::parse_yarn_lock(text),
+        ManifestKind::PnpmLock => npm::parse_pnpm_lock(text),
     }
     .map(|pkgs| {
         pkgs.into_iter()
@@ -48,12 +53,16 @@ fn scope_for(kind: ManifestKind) -> Scope {
         | ManifestKind::GoSum
         | ManifestKind::PoetryLock
         | ManifestKind::UvLock
-        | ManifestKind::GradleLockfile => Scope::Transitive,
+        | ManifestKind::GradleLockfile
+        | ManifestKind::PackageLock
+        | ManifestKind::YarnLock
+        | ManifestKind::PnpmLock => Scope::Transitive,
         _ => Scope::Direct,
     }
 }
 
-/// Parse dependency EDGES from a graph-source manifest (Cargo.lock, go.mod).
+/// Parse dependency EDGES from a graph-source manifest (Cargo.lock, go.mod,
+/// and the npm / yarn / pnpm lockfiles).
 /// Returns (from_purl_base, to_purl, source) where `from_purl_base` is
 /// either a full purl (`pkg:cargo/serde@1.0.1`) or, for go.mod's root module,
 /// the module path used as a pseudo-package name with empty version.
@@ -66,6 +75,9 @@ pub fn parse_dep_edges(
     match kind {
         ManifestKind::CargoLock => cargo::cargo_lock_edges(text),
         ManifestKind::GoMod => gomod::go_mod_edges(text),
+        ManifestKind::PackageLock => npm::package_lock_edges(text),
+        ManifestKind::YarnLock => npm::yarn_lock_edges(text),
+        ManifestKind::PnpmLock => npm::pnpm_lock_edges(text),
         _ => Ok(Vec::new()),
     }
 }

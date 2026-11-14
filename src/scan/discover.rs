@@ -6,8 +6,21 @@ use std::collections::BTreeSet;
 use super::{ManifestKind, ManifestRef};
 use crate::error::ToolResult;
 
-pub(crate) const SKIP_DIRS: &[&str] =
-    &[".git", "target", "node_modules", "vendor", "dist", "build"];
+pub(crate) const SKIP_DIRS: &[&str] = &[
+    ".git",
+    "target",
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    "bower_components",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".turbo",
+    ".yarn",
+    "coverage",
+];
 
 /// The manifest filename → kind mapping, one table.
 pub fn kind_for(path: &str) -> Option<ManifestKind> {
@@ -22,6 +35,10 @@ pub fn kind_for(path: &str) -> Option<ManifestKind> {
         "uv.lock" => ManifestKind::UvLock,
         "pom.xml" => ManifestKind::PomXml,
         "gradle.lockfile" => ManifestKind::GradleLockfile,
+        "package.json" => ManifestKind::PackageJson,
+        "package-lock.json" | "npm-shrinkwrap.json" => ManifestKind::PackageLock,
+        "yarn.lock" => ManifestKind::YarnLock,
+        "pnpm-lock.yaml" => ManifestKind::PnpmLock,
         _ if name == "requirements.txt"
             || name.starts_with("requirements-") && name.ends_with(".txt") =>
         {
@@ -99,6 +116,16 @@ mod tests {
         );
         assert_eq!(kind_for("build.gradle.kts"), Some(ManifestKind::Gradle));
         assert_eq!(kind_for("app/build.gradle"), Some(ManifestKind::Gradle));
+        assert_eq!(
+            kind_for("web/package.json"),
+            Some(ManifestKind::PackageJson)
+        );
+        assert_eq!(
+            kind_for("package-lock.json"),
+            Some(ManifestKind::PackageLock)
+        );
+        assert_eq!(kind_for("yarn.lock"), Some(ManifestKind::YarnLock));
+        assert_eq!(kind_for("pnpm-lock.yaml"), Some(ManifestKind::PnpmLock));
         assert_eq!(kind_for("src/main.rs"), None);
         assert_eq!(kind_for("requirements.txt.bak"), None);
     }
