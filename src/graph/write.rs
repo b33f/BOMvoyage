@@ -33,11 +33,36 @@ fn opt_s(v: &Option<String>) -> Value {
     }
 }
 
+/// Write `rows` in batches, one transaction per batch. A whole scan in one
+/// transaction can exceed RelateDB's 64 MB per-WAL-record cap (a JS repo's
+/// lockfile history alone runs to hundreds of thousands of rows); every
+/// statement here is an idempotent MERGE, so a scan interrupted between
+/// batches is completed by simply re-running it.
 pub fn flush(conn: &mut relate::Connection, cypher: &str, rows: Vec<Row>) -> relate::Result<()> {
     for batch in rows.chunks(BATCH) {
-        conn.query_with_params(cypher, rows_param(batch))?;
+        in_txn(conn, |c| {
+            c.query_with_params(cypher, rows_param(batch)).map(|_| ())
+        })?;
     }
     Ok(())
+}
+
+/// Run `f` in its own transaction, rolling back on error.
+pub fn in_txn(
+    conn: &mut relate::Connection,
+    f: impl FnOnce(&mut relate::Connection) -> relate::Result<()>,
+) -> relate::Result<()> {
+    conn.begin()?;
+    match f(conn) {
+        Ok(()) => {
+            conn.commit()?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.rollback();
+            Err(e)
+        }
+    }
 }
 
 /// Nodes for every package version ever seen.
@@ -149,8 +174,9 @@ MERGE (x)-[r:REMOVED {at_sha: row.sha}]->(p)
 SET r.at_date = row.date
 "#;
 
-/// Provisional intervals (a current-only scan) are deleted before the full
-/// history replaces them.
+/// Provisional intervals (a current-only scan) are deleted once the full
+/// history has been written over them. Real intervals that share a
+/// provisional key were MERGEd to `provisional = false` and survive.
 pub const DELETE_PROVISIONAL: &str = r#"
 MATCH ()-[r:DECLARES]->() WHERE r.provisional = true DELETE r
 "#;
@@ -172,6 +198,7 @@ pub fn eco_name(eco: super::super::scan::Eco) -> &'static str {
         super::super::scan::Eco::Java => "java",
         super::super::scan::Eco::Rust => "rust",
         super::super::scan::Eco::Go => "go",
+        super::super::scan::Eco::Node => "node",
     }
 }
 

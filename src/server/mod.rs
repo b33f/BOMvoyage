@@ -15,6 +15,7 @@ use crate::server::http::{read_request, respond, Request};
 
 pub const INDEX_HTML: &str = include_str!("../ui/index.html");
 pub const APP_JS: &str = include_str!("../ui/app.js");
+pub const SEARCH_JS: &str = include_str!("../ui/search.js");
 pub const STYLE_CSS: &str = include_str!("../ui/style.css");
 pub const CYTOSCAPE_JS: &[u8] = include_bytes!("../ui/vendor/cytoscape.min.js");
 
@@ -58,6 +59,9 @@ fn route(stream: &mut TcpStream, req: &Request, api: &Api) -> std::io::Result<()
             INDEX_HTML.as_bytes(),
         ),
         ("GET", "/app.js") => respond(stream, 200, "application/javascript", APP_JS.as_bytes()),
+        ("GET", "/search.js") => {
+            respond(stream, 200, "application/javascript", SEARCH_JS.as_bytes())
+        }
         ("GET", "/style.css") => respond(stream, 200, "text/css", STYLE_CSS.as_bytes()),
         ("GET", "/cytoscape.min.js") => {
             respond(stream, 200, "application/javascript", CYTOSCAPE_JS)
