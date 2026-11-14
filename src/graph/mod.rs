@@ -421,12 +421,9 @@ pub fn resolve_as_of(conn: &mut relate::Connection, token: Option<&str>) -> Tool
         let result = conn.query("MATCH (c:Commit) RETURN max(c.date) AS d")?;
         return Ok(cell_string(&result, 0).unwrap_or_else(|| "9999-12-31T23:59:59Z".to_string()));
     }
-    // Date-only input: expand to end of day so the whole day is included.
-    if token.len() == 10 && token.as_bytes()[4] == b'-' {
-        return Ok(format!("{token}T23:59:59Z"));
-    }
-    if token.len() >= 20 {
-        return Ok(token.to_string());
+    // Date-only / datetime tokens need no database.
+    if let Some(expanded) = expand_temporal_token(token) {
+        return Ok(expanded);
     }
     // Otherwise: a (partial) commit sha.
     let mut params = BTreeMap::new();
@@ -440,10 +437,59 @@ pub fn resolve_as_of(conn: &mut relate::Connection, token: Option<&str>) -> Tool
     }
 }
 
+/// The DB-free half of as-of resolution: a `YYYY-MM-DD` date expands to the
+/// *end* of that UTC day (so the whole day is included in the interval
+/// predicates), a full datetime passes through untouched, anything else is a
+/// candidate commit sha.
+fn expand_temporal_token(token: &str) -> Option<String> {
+    if token.len() == 10 && token.as_bytes()[4] == b'-' {
+        return Some(format!("{token}T23:59:59Z"));
+    }
+    if token.len() >= 20 {
+        return Some(token.to_string());
+    }
+    None
+}
+
 fn cell_string(result: &relate::QueryResult, col: usize) -> Option<String> {
     result
         .rows
         .first()
         .and_then(|r| r.get(col))
         .and_then(|v| v.as_string().map(str::to_string))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn date_tokens_expand_and_datetimes_pass_through() {
+        // date-only → end of day, so the entire day is inside the interval
+        assert_eq!(
+            expand_temporal_token("2024-06-01").as_deref(),
+            Some("2024-06-01T23:59:59Z")
+        );
+        // full datetime passes through untouched (string-compared later)
+        assert_eq!(
+            expand_temporal_token("2024-06-01T12:34:56Z").as_deref(),
+            Some("2024-06-01T12:34:56Z")
+        );
+        // sha prefixes and garbage are not temporal tokens
+        assert!(expand_temporal_token("abc123").is_none());
+        assert!(expand_temporal_token("2024-06-01 ").is_none());
+        assert!(expand_temporal_token("").is_none());
+        // a short token with a dash at index 4 but not a date (11 chars)
+        assert!(expand_temporal_token("2024-06-011").is_none());
+    }
+
+    #[test]
+    fn civil_date_conversion_known_values() {
+        // Howard Hinnant's algorithm, pinned against an independent calendar
+        assert_eq!(civil_from_days(0), (1970, 1, 1)); // epoch
+        assert_eq!(civil_from_days(19_782), (2024, 2, 29)); // leap day
+        assert_eq!(civil_from_days(20_679), (2026, 8, 14));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31)); // before epoch
+        assert_eq!(civil_from_days(20_771), (2026, 11, 14));
+    }
 }

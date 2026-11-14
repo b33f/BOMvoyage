@@ -323,3 +323,59 @@ mod tests {
         assert!(resolve_agent("nope").is_none());
     }
 }
+
+#[cfg(test)]
+mod sanity {
+    use super::*;
+
+    #[test]
+    fn agent_table_is_sane() {
+        // unique --agent keys (the hard-error contract depends on them)
+        let mut keys: Vec<&str> = AGENTS.iter().map(|a| a.key).collect();
+        assert_eq!(keys.len(), AGENTS.len(), "duplicate --agent key");
+        keys.sort();
+        // every agent has at least one config root, and no root is claimed twice
+        let mut roots: Vec<&str> = Vec::new();
+        for a in AGENTS {
+            assert!(!a.roots.is_empty(), "{} has no config roots", a.key);
+            assert!(!a.display.is_empty());
+            roots.extend(a.roots.iter());
+        }
+        let root_count = roots.len();
+        roots.sort();
+        roots.dedup();
+        assert_eq!(roots.len(), root_count, "two agents share a config root");
+        // the whole supported list matches the documented set
+        assert_eq!(
+            keys,
+            [
+                "antigravity",
+                "claude-code",
+                "cline",
+                "codex",
+                "copilot",
+                "cursor",
+                "gemini-cli",
+                "junie",
+                "kiro",
+                "opencode",
+                "pi",
+                "windsurf"
+            ]
+        );
+    }
+
+    #[test]
+    fn embedded_skill_has_valid_frontmatter() {
+        assert!(SKILL_MD.starts_with("---\n"), "frontmatter first");
+        let end = SKILL_MD[4..].find("\n---").expect("closing frontmatter") + 4;
+        let front = &SKILL_MD[4..end];
+        assert!(front.contains("name: bomvoyage"));
+        assert!(front.contains("description: "));
+        // the body actually teaches the commands it advertises
+        assert!(SKILL_MD.contains("bomvoyage scan"));
+        assert!(SKILL_MD.contains("bomvoyage query"));
+        assert!(SKILL_MD.contains("update apply"));
+        assert!(SKILL_MD.contains("--no-update-check"));
+    }
+}

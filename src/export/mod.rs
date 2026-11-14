@@ -103,3 +103,118 @@ pub fn render(
         crate::cli::Format::Csv => flat::render_csv(rows),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rows() -> Vec<SbomRow> {
+        vec![
+            SbomRow {
+                purl: "pkg:cargo/serde@1.0.2".into(),
+                name: "serde".into(),
+                ecosystem: "cargo".into(),
+                version: "1.0.2".into(),
+                scope: "direct".into(),
+                requirement: "1.0".into(),
+                manifest: "Cargo.toml".into(),
+                added_by: "B33F".into(),
+                added_date: "2026-01-01T00:00:00Z".into(),
+            },
+            SbomRow {
+                purl: "pkg:cargo/serde_core@1.0.2".into(),
+                name: "serde_core".into(),
+                ecosystem: "cargo".into(),
+                version: "1.0.2".into(),
+                scope: "transitive".into(),
+                requirement: "1.0".into(),
+                manifest: "Cargo.lock".into(),
+                added_by: "B33F".into(),
+                added_date: "2026-01-01T00:00:00Z".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn cyclonedx_render_is_valid_and_complete() {
+        let edges = vec![(
+            "pkg:cargo/serde@1.0.2".into(),
+            "pkg:cargo/serde_core@1.0.2".into(),
+        )];
+        let text = render(
+            crate::cli::Format::Cyclonedx,
+            &rows(),
+            &edges,
+            "demo",
+            "2026-11-14",
+        );
+        let doc: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+        assert_eq!(doc["bomFormat"], "CycloneDX");
+        assert_eq!(doc["specVersion"], "1.5");
+        let components = doc["components"].as_array().expect("components array");
+        assert_eq!(components.len(), 2);
+        assert!(doc["dependencies"].as_array().unwrap().len() >= 2);
+        // every component carries its purl
+        assert!(components
+            .iter()
+            .all(|c| c["purl"].as_str().unwrap_or("").starts_with("pkg:")));
+    }
+
+    #[test]
+    fn spdx_render_is_valid_and_links_relationships() {
+        let edges = vec![(
+            "pkg:cargo/serde@1.0.2".into(),
+            "pkg:cargo/serde_core@1.0.2".into(),
+        )];
+        let text = render(
+            crate::cli::Format::Spdx,
+            &rows(),
+            &edges,
+            "demo",
+            "2026-11-14",
+        );
+        let doc: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+        assert_eq!(doc["spdxVersion"], "SPDX-2.3");
+        let packages = doc["packages"].as_array().expect("packages array");
+        assert_eq!(packages.len(), 2);
+        let rels = doc["relationships"].as_array().expect("relationships");
+        assert!(
+            rels.iter().any(|r| r["relationshipType"] == "DEPENDS_ON"),
+            "the serde → serde_core edge must appear"
+        );
+        // SPDX ids are sanitized (no ':' or '/')
+        assert!(packages
+            .iter()
+            .all(|p| p["SPDXID"].as_str().unwrap().starts_with("SPDXRef-")));
+    }
+
+    #[test]
+    fn render_dispatches_all_formats_to_parseable_output() {
+        let edges = vec![];
+        let rows = rows();
+        for fmt in [
+            crate::cli::Format::Json,
+            crate::cli::Format::Csv,
+            crate::cli::Format::Spdx,
+            crate::cli::Format::Cyclonedx,
+        ] {
+            let text = render(fmt, &rows, &edges, "demo", "2026-11-14");
+            assert!(!text.is_empty(), "{fmt:?} rendered nothing");
+        }
+        assert!(serde_json::from_str::<serde_json::Value>(&render(
+            crate::cli::Format::Json,
+            &rows,
+            &edges,
+            "demo",
+            "2026-11-14"
+        ))
+        .is_ok());
+        assert!(
+            render(crate::cli::Format::Csv, &rows, &edges, "d", "x")
+                .lines()
+                .count()
+                >= 3,
+            "csv has a header + rows"
+        );
+    }
+}
