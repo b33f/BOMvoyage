@@ -9,10 +9,10 @@ use std::sync::Arc;
 use clap::Parser;
 use relate::{Database, OpenMode, OpenOptions};
 
-use bomvoyage::cli::{Cli, Command, UpdateAction};
+use bomvoyage::cli::{Cli, Command, SkillAction, UpdateAction};
 use bomvoyage::error::{ToolError, ToolResult};
 use bomvoyage::graph::SbomGraph;
-use bomvoyage::{export, graph, scan, server, update};
+use bomvoyage::{export, graph, scan, server, skill, update};
 
 fn main() {
     let cli = Cli::parse();
@@ -31,6 +31,12 @@ fn run(cli: &Cli) -> ToolResult<()> {
         Some(Command::Update { action }) => match action {
             UpdateAction::Check => update::check_command(),
             UpdateAction::Apply => update::apply_command(),
+        },
+        Some(Command::Skill { action }) => match action {
+            SkillAction::Install { skill, agent } => {
+                skill::install_command(skill, agent.as_deref())
+            }
+            SkillAction::List => skill::list_command(),
         },
         None => all_in_one(&cli.path, &cli.db, 8334, 5000, cli.no_update_check),
         Some(Command::Scan {
