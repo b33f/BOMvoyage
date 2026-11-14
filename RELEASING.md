@@ -48,6 +48,9 @@ whole release (this happened to both v0.1.0 and the first v0.1.1 run).
    $ cargo clippy --locked --all-targets -- -D warnings
    $ cargo deny check        # advisories, licenses, sources, bans
    ```
+   If dependencies changed, also regenerate `THIRDPARTY-NOTICES.md`
+   (inventory + license texts of everything the binary distributes; it
+   ships in the release archives):
 3. Commit: `chore: bump version to X.Y.Z`.
 4. Tag and push — the tag push is what triggers the release workflow:
    ```console

@@ -62,7 +62,7 @@ jobs:
           STAGING="bomvoyage-v${VERSION}-${{ matrix.target }}"
           mkdir "$STAGING"
           cp "target/${{ matrix.target }}/release/bomvoyage" "$STAGING/"
-          cp README.md SECURITY.md LICENSE "$STAGING/"
+          cp README.md SECURITY.md LICENSE THIRDPARTY-NOTICES.md "$STAGING/"
           tar czf "$STAGING.tar.gz" "$STAGING"
           sha256sum "$STAGING.tar.gz" > "$STAGING.tar.gz.sha256"
 
@@ -74,7 +74,7 @@ jobs:
           $staging = "bomvoyage-v$version-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $staging | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/bomvoyage.exe" $staging
-          Copy-Item README.md, SECURITY.md, LICENSE $staging
+          Copy-Item README.md, SECURITY.md, LICENSE, THIRDPARTY-NOTICES.md $staging
           Compress-Archive -Path $staging -DestinationPath "$staging.zip"
           Get-FileHash "$staging.zip" -Algorithm SHA256 | ForEach-Object { "{0}  {1}" -f $_.Hash, $_.Path } | Out-File -Encoding ascii "$staging.zip.sha256"
 
