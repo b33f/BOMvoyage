@@ -19,7 +19,7 @@ pub enum Format {
     name = "bomvoyage",
     version,
     about = "BOMvoyage — temporal SBOM generator and explorer, powered by RelateDB",
-    long_about = "Scans a git repository's dependency manifests (Python, Java, Rust, Go), \
+    long_about = "Scans a git repository's dependency manifests (Python, Java, Rust, Go, Node.js/TypeScript), \
 builds a graph of every dependency, transitive dependency, usage site and the full \
 git history of who added what and when versions changed — then serves an interactive \
 web UI with time travel: view, query and export the SBOM as of any commit or date.\n\n\
