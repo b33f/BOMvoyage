@@ -62,3 +62,10 @@ findings:
 - **Release artifacts are reproducible-ish and checksummed**: every release
   ships a SHA-256 checksum per platform archive, built by the tagged CI
   workflow from a clean checkout.
+- **CI is supply-chain hardened**: every GitHub Action is pinned to a **full
+  commit SHA** (never a movable tag or branch), workflows run least-privilege
+  (`contents: read` everywhere except the release job's `contents: write`),
+  checkouts do not persist git credentials, jobs run under timeouts, and
+  Dependabot watches both the actions and the Rust crate graph (Cargo.lock is
+  committed, so builds are `--locked` against pinned, checksummed versions).
+  CodeQL scans the Rust code weekly for security findings.
