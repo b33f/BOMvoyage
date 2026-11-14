@@ -309,4 +309,4 @@ licensed; their inventory and license texts are in
 [THIRDPARTY-NOTICES.md](THIRDPARTY-NOTICES.md), which also ships in every
 release archive.
 
-Security tooling: dependency PRs are analyzed by the Socket Security App (zero-day malware heuristics) in addition to the cargo-deny gate.
+Security tooling: dependency PRs are analyzed by the Socket Security App (zero-day malware heuristics) in addition to the cargo-deny gate and lockfile tamper guards.
