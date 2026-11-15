@@ -337,7 +337,7 @@ function layoutOptions(n, seeded) {
 /// neighbouring fans never touch. Returns false when there are no hubs.
 /// With `animate`, nodes drift toward their slot (clamped to MAX_DRIFT —
 /// the arrangement migrates over days instead of jumping).
-function applyAreasLayout(animate) {
+function applyAreasLayout(animate, unconstrained) {
   const hubs = cy.nodes("[type = 'area']");
   if (hubs.length === 0) return false;
   const tau = Math.PI * 2;
@@ -351,18 +351,23 @@ function applyAreasLayout(animate) {
   });
   // Ring circumference sized so adjacent fans stay pr_i + pr_j + gap apart.
   const R = Math.max(170, (fans.reduce((s, f) => s + 2 * f.pr, 0) / tau) * 1.35);
-  const ms = animate ? ANIM_MS / playbackRate : 0;
+  const ms = unconstrained ? 0 : animate ? ANIM_MS / playbackRate : 0;
+  const place = (node, x, y) => {
+    if (node.locked()) return; // pinned (version-bump replacement)
+    if (unconstrained) node.position({ x, y });
+    else driftToward(node, x, y, ms);
+  };
   let angle = -Math.PI / 2;
   fans.forEach((f, i) => {
     const mid = angle + f.pr / R; // centre of this hub's angular slice
     angle += (2 * f.pr) / R;
     const hx = R * Math.cos(mid);
     const hy = R * Math.sin(mid);
-    driftToward(f.hub, hx, hy, ms);
+    place(f.hub, hx, hy);
     const spin = i * 2.4; // stagger fans so neighbours don't line up
     f.kids.forEach((p, j) => {
       const pa = mid + spin + (j / Math.max(f.kids.length, 1)) * tau;
-      driftToward(p, hx + f.pr * Math.cos(pa), hy + f.pr * Math.sin(pa), ms);
+      place(p, hx + f.pr * Math.cos(pa), hy + f.pr * Math.sin(pa));
     });
   });
   return true;
@@ -1348,7 +1353,9 @@ function wireCanvasControls() {
   $("zoom-fit").addEventListener("click", () => cy && fitReasonably());
   $("relayout").addEventListener("click", () => {
     if (!cy) return;
-    if (!applyAreasLayout()) {
+    // Fully re-optimized in one click: exact slots, no drift clamp (the
+    // MAX_DRIFT limit governs time travel only, not explicit relayouts).
+    if (!applyAreasLayout(false, true)) {
       cy.layout(layoutOptions(cy.nodes().length)).run();
     }
     fitReasonably();
