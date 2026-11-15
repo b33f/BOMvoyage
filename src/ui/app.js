@@ -14,10 +14,14 @@ const ECOSYSTEM_COLORS = {
 /// triangles. The scheme is the same in every mode — a vulnerable package
 /// is always the one non-green shape on the canvas.
 const PACKAGE_GREEN = "#3fb950";
+const VULNERABLE_RED = "#f85149";
 
-/// Arrival flourish for a brand-new dependency: it materializes purple with
-/// a pink outline and fades to the standard green as it settles in.
+/// Arrival flourish colors. PURPLE is reserved for net-new dependencies;
+/// an upgraded version arrives YELLOW on the replaced version's spot.
+/// Both fade to the node's true color — green, or red when it arrives
+/// with known advisories (a vulnerable package never animates as green).
 const ARRIVAL_PURPLE = "#a371f7";
+const UPGRADE_YELLOW = "#f2cc60";
 const ARRIVAL_PINK = "#ff7bac";
 /// Base duration of graph motion (layout glides, fan animation). The 4×
 /// control divides it by four — and divides the sweep pacing by four —
@@ -205,7 +209,7 @@ const CY_STYLE = [
     selector: "node[vulns > 0]",
     style: {
       shape: "triangle",
-      "background-color": "#f85149",
+      "background-color": VULNERABLE_RED,
       width: 16,
       height: 16,
     },
@@ -496,22 +500,30 @@ function baseOf(id) {
 /// cleared afterwards so the stylesheet regains control (e.g. a later
 /// `vulns > 0` must be able to turn the node red). Hubs (dev:/area:) are
 /// groupings, not dependencies — they arrive plain.
-function arriveWithFlourish(ele, data) {
+/// A brand-new dependency arrives purple, an upgraded version arrives
+/// yellow (on the replaced version's spot), and both fade to the node's
+/// TRUE color — green, or red when it arrives with known advisories
+/// (border fading out throughout). The inline styles are cleared
+/// afterwards so the stylesheet regains full control. Hubs (dev:/area:)
+/// are groupings, not dependencies — they arrive plain.
+function arriveWithFlourish(ele, data, isUpgrade) {
   if (data.type !== "package") return;
+  const from = isUpgrade ? UPGRADE_YELLOW : ARRIVAL_PURPLE;
+  const to = (data.vulns || 0) > 0 ? VULNERABLE_RED : PACKAGE_GREEN;
   const fadeMs = (ANIM_MS * 2) / playbackRate;
   // Marked while fading: the sweep waits for position motion but not for
   // this color crossfade (it continues gracefully across steps).
   ele.addClass("arriving");
   ele.style({
-    "background-color": ARRIVAL_PURPLE,
+    "background-color": from,
     "border-color": ARRIVAL_PINK,
     "border-width": 2.5,
   });
   ele.animate(
     {
       style: {
-        "background-color": PACKAGE_GREEN,
-        "border-color": PACKAGE_GREEN,
+        "background-color": to,
+        "border-color": to,
         "border-width": 0,
       },
     },
@@ -594,7 +606,7 @@ function rebuildGraph(elements) {
           const replacement = base !== null ? replacedAt.get(base) : undefined;
           const pos = replacement || spawnPosition(n.data.id, elements);
           const ele = cy.add({ data: Object.assign({}, n.data), position: pos });
-          arriveWithFlourish(ele, n.data);
+          arriveWithFlourish(ele, n.data, replacement !== undefined);
           if (replacement) {
             // Pin the new version on the old one's spot while the layout
             // arranges the neighbourhood around it, then release it.
@@ -695,7 +707,7 @@ function renderLegend() {
   // The vulnerable entry goes last, on a shape of its own — the legend
   // teaches the red triangle in one glance.
   if (vulnCount > 0) {
-    items.set("vulnerable", { label: "vulnerable", color: "#f85149", cls: "tri", count: vulnCount });
+    items.set("vulnerable", { label: "vulnerable", color: VULNERABLE_RED, cls: "tri", count: vulnCount });
   }
   legend.innerHTML = [...items.values()]
     .map((i) => `<span><i class="${i.cls}" style="background:${i.color}"></i>${escapeHtml(i.label)} <b class="muted">${i.count}</b></span>`)
