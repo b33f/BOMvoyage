@@ -1260,6 +1260,11 @@ function escapeHtml(s) {
 /// The meta line in the app bar: counts, scan date, ecosystem badges,
 /// version chip, project title.
 function renderMeta(meta) {
+  // repo mode: prepopulate the on-demand box (prefill + the org's popular
+  // repos as dropdown suggestions)
+  if (meta.repo_spec && window.BOMVOYAGE_ONDEMAND) {
+    window.BOMVOYAGE_ONDEMAND.noteSpec(meta.repo_spec);
+  }
   const badges = (meta.ecosystems || [])
     .map((e) => `<span class="badge"><span class="swatch" style="background:${ECOSYSTEM_COLORS[e.ecosystem] || ECOSYSTEM_COLORS.generic}"></span>${escapeHtml(e.ecosystem)} · ${e.names}</span>`)
     .join("");

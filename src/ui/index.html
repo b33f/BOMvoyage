@@ -34,9 +34,10 @@
     </label>
   </div>
   <div class="tool-group" id="repo-box" hidden>
-    <input id="repo-input" placeholder="github org/repo — scan on demand" autocomplete="off" spellcheck="false" aria-label="GitHub org/repo to scan on demand">
+    <input id="repo-input" list="repo-suggestions" placeholder="github org/repo — scan on demand" autocomplete="off" spellcheck="false" aria-label="GitHub org/repo to scan on demand">
     <button id="repo-go" type="button">Scan</button>
     <span id="repo-status" class="muted small"></span>
+    <datalist id="repo-suggestions"></datalist>
   </div>
   <div class="tool-group" id="search-group">
     <div id="search-box">

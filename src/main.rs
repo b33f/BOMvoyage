@@ -56,6 +56,7 @@ fn run(cli: &Cli) -> ToolResult<()> {
         None => all_in_one(
             &effective_path(&cli.path)?,
             &cli.db,
+            cli.repo.clone(),
             8334,
             5000,
             detailed,
@@ -94,6 +95,7 @@ fn run(cli: &Cli) -> ToolResult<()> {
                 &effective_path(path)?,
                 opened,
                 &db_path,
+                cli.repo.clone(),
                 *port,
                 *open,
                 *max_commits,
@@ -122,6 +124,7 @@ fn run(cli: &Cli) -> ToolResult<()> {
                 &effective_path(path)?,
                 db,
                 out,
+                cli.repo.clone(),
                 *force,
                 *max_commits,
                 detailed,
@@ -163,9 +166,11 @@ fn spawn_daily_update_check(no_update_check: bool) {
 /// The demo path: `bomvoyage` in a repo = fast current scan, serve
 /// immediately with the browser opened, and keep walking git history in the
 /// background to fill in the time-travel data.
+#[allow(clippy::too_many_arguments)]
 fn all_in_one(
     path: &Path,
     db: &Path,
+    repo_spec: Option<String>,
     port: u16,
     max_commits: u64,
     detailed: bool,
@@ -178,6 +183,7 @@ fn all_in_one(
         path,
         opened,
         db,
+        repo_spec,
         port,
         true,
         max_commits,
@@ -195,6 +201,7 @@ fn scan_and_serve(
     path: &Path,
     db: Arc<Database>,
     db_path: &Path,
+    repo_spec: Option<String>,
     port: u16,
     open_browser: bool,
     max_commits: u64,
@@ -306,7 +313,7 @@ fn scan_and_serve(
     }
     // The db file's path rides along: on-demand repo scans (the UI's URL
     // box) write each repo to its own sibling database file and hot-swap.
-    server::serve(db, db_path, &repo_name, port, history_done)?;
+    server::serve(db, db_path, repo_spec, &repo_name, port, history_done)?;
     Ok(())
 }
 
@@ -405,6 +412,7 @@ fn cmd_site(
     path: &Path,
     db: &Path,
     out: &Path,
+    repo_spec: Option<String>,
     force: bool,
     max_commits: u64,
     detailed: bool,
@@ -415,6 +423,7 @@ fn cmd_site(
         path,
         db,
         out,
+        repo_spec,
         force,
         max_commits,
         detailed,

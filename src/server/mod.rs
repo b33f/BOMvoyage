@@ -61,6 +61,7 @@ pub fn install_shutdown_handler() {
 pub fn serve(
     db: Arc<Database>,
     db_path: &std::path::Path,
+    repo_spec: Option<String>,
     repo_name: &str,
     port: u16,
     history_done: Option<mpsc::Receiver<()>>,
@@ -71,6 +72,7 @@ pub fn serve(
     let api = Arc::new(Api {
         db: std::sync::RwLock::new(db),
         db_path: db_path.to_path_buf(),
+        repo_spec: std::sync::RwLock::new(repo_spec),
         repo_name: repo_name.to_string(),
     });
     // Non-blocking accept + poll: the blocking `incoming()` iterator cannot
@@ -264,6 +266,7 @@ mod tests {
             super::serve(
                 std::sync::Arc::new(db),
                 std::path::Path::new("shutdown-test.rl"),
+                None,
                 "shutdown-test",
                 0, // ephemeral port; no request is ever made
                 None,

@@ -292,6 +292,38 @@ window.BOMVOYAGE_ONDEMAND = (function () {
 
   // ------------------------------------------------------------- wiring
 
+  let currentOrg = null;
+
+  /// Prepopulate the box: prefill the current spec + fetch the org's 10
+  /// most popular repos (stars) as dropdown suggestions. Free typing is
+  /// never restricted — the datalist only suggests. Called with the spec
+  /// of whichever repo is currently loaded.
+  async function noteSpec(spec) {
+    if (!spec) return;
+    const input = document.getElementById("repo-input");
+    if (input && !input.value) input.value = spec;
+    const org = spec.split("/")[0];
+    if (org === currentOrg) return;
+    currentOrg = org;
+    try {
+      const res = await fetch(`https://api.github.com/orgs/${encodeURIComponent(org)}/repos?sort=stars&per_page=10&direction=desc`);
+      if (!res.ok) return;
+      const repos = await res.json();
+      const dl = document.getElementById("repo-suggestions");
+      if (dl && Array.isArray(repos)) {
+        dl.innerHTML = "";
+        for (const r of repos) {
+          const opt = document.createElement("option");
+          opt.value = `${org}/${r.name}`;
+          if (r.description) opt.label = `${r.name} — ${String(r.description).slice(0, 60)}`;
+          dl.appendChild(opt);
+        }
+      }
+    } catch (_) {
+      // suggestions are a nicety; a failed org listing never blocks scanning
+    }
+  }
+
   async function wire() {
     // The box works in BOTH modes: on a generated static site it scans
     // in-browser; against the server it calls /api/scan-repo, which
@@ -323,6 +355,8 @@ window.BOMVOYAGE_ONDEMAND = (function () {
           });
           set(`${res.repo}: ${res.packages} packages · ${res.commits} commits`);
         }
+        currentOrg = null; // refresh the suggestions for the new org
+        await noteSpec(spec);
         if (window.BOMVOYAGE_ON_GRAPH_REBUILT) await window.BOMVOYAGE_ON_GRAPH_REBUILT();
       } catch (e) {
         set(`failed: ${e.message}`);
@@ -339,5 +373,5 @@ window.BOMVOYAGE_ONDEMAND = (function () {
 
   wire();
 
-  return { classify, parseManifest, scanRepo, validSpec, purlFor };
+  return { classify, parseManifest, scanRepo, validSpec, purlFor, noteSpec };
 })();

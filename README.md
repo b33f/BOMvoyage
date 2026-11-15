@@ -205,7 +205,9 @@ file. URLs are relative, so it works under a subpath of an existing site.
 The toolbar gains an **on-demand box** (github org/repo): entering a repo
 scans its CURRENT dependencies in the browser (GitHub public API) — no time
 travel or usage sites for on-demand repos (a browser can't run git); the
-pre-built snapshot is the full-fidelity view. Note: the published artifact
+pre-built snapshot is the full-fidelity view. In repo mode the box
+prepopulates: the current org's ten most-starred repos as dropdown
+suggestions (any typed org/repo still scans). Note: the published artifact
 exposes the repository's dependency history, including committer names and
 emails. The WASM engine is Chromium-tested (upstream); other browsers
 untested.

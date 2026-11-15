@@ -20,6 +20,9 @@ pub struct Api {
     /// sibling file (nothing from two repos ever mixes in one store).
     pub db_path: PathBuf,
     pub repo_name: String,
+    /// The github spec currently being served (`--repo` or the last
+    /// on-demand swap), if any — the UI prepopulates its repo box from it.
+    pub repo_spec: std::sync::RwLock<Option<String>>,
 }
 
 impl Api {
@@ -176,6 +179,7 @@ impl Api {
 
         Ok(serde_json::json!({
             "name": self.current_name(),
+            "repo_spec": self.repo_spec.read().ok().and_then(|g| g.clone()),
             "version": env!("CARGO_PKG_VERSION"),
             "head_sha": head_sha,
             "last_scanned_at": scanned_at,
@@ -367,8 +371,11 @@ impl Api {
             return Ok(serde_json::json!({ "error": e.to_string() }));
         }
 
-        // hot-swap the served database
+        // hot-swap the served database + remember the spec
         *self.db.write().expect("db lock") = Arc::new(new_db.db);
+        if let Ok(mut g) = self.repo_spec.write() {
+            *g = Some(format!("{org}/{repo}"));
+        }
 
         eprintln!(
             "on-demand scan: {spec} — {} packages across {} commits (served from {})",

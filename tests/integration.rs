@@ -295,6 +295,7 @@ fn detailed_mode_properties_survive_rescan() {
                 relate::Database::open(&db.to_string_lossy()).expect("open"),
             )),
             db_path: db.clone(),
+            repo_spec: std::sync::RwLock::new(None),
             repo_name: "demo".into(),
         };
         let meta = api.meta().expect("meta");
@@ -494,6 +495,7 @@ fn detailed_mode_properties_survive_rescan() {
                 relate::Database::open(&db.to_string_lossy()).expect("open"),
             )),
             db_path: db.clone(),
+            repo_spec: std::sync::RwLock::new(None),
             repo_name: "demo".into(),
         };
         let g = api
@@ -525,6 +527,7 @@ fn detailed_mode_properties_survive_rescan() {
                 relate::Database::open(&db.to_string_lossy()).expect("open"),
             )),
             db_path: db.clone(),
+            repo_spec: std::sync::RwLock::new(None),
             repo_name: "demo".into(),
         };
         let g = api
@@ -554,6 +557,7 @@ fn detailed_mode_properties_survive_rescan() {
                 relate::Database::open(&db.to_string_lossy()).expect("open"),
             )),
             db_path: db.clone(),
+            repo_spec: std::sync::RwLock::new(None),
             repo_name: "demo".into(),
         };
         let meta = api.meta().expect("meta");

@@ -125,6 +125,10 @@ pub struct Snapshot {
     pub repo_name: String,
     pub head_sha: String,
     pub history_complete: bool,
+    /// The github spec (--repo org/repo) the export came from, if any —
+    /// the generated page prepopulates its repo box from it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_spec: Option<String>,
     /// Rows per stage, keyed by the stage name; stages with no rows are
     /// omitted (leaner JSON, and the replay skips them).
     pub stages: BTreeMap<String, Vec<RowJson>>,
@@ -175,6 +179,7 @@ pub fn dump(
     }
     Ok(Snapshot {
         format: 1,
+        repo_spec: None,
         tool_version: env!("CARGO_PKG_VERSION").to_string(),
         generated_at: crate::graph::now_iso(),
         repo_name: repo_name.to_string(),

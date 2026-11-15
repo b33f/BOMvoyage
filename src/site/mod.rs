@@ -20,6 +20,7 @@ pub fn site_command(
     path: &Path,
     db_path: &Path,
     out: &Path,
+    repo_spec: Option<String>,
     force: bool,
     max_commits: u64,
     detailed: bool,
@@ -100,7 +101,8 @@ pub fn site_command(
     let history_complete =
         crate::graph::stored_history_head(&db)?.as_deref() == Some(head_sha.as_str());
     let mut conn = db.connect()?;
-    let snapshot = dump::dump(&mut conn, &repo_name, &head_sha, history_complete)?;
+    let mut snapshot = dump::dump(&mut conn, &repo_name, &head_sha, history_complete)?;
+    snapshot.repo_spec = repo_spec;
     let stage_count = snapshot.stages.len();
     let written = emit::emit(out, &snapshot)?;
 

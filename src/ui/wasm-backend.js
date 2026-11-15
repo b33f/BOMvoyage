@@ -230,6 +230,7 @@ window.BOMVOYAGE_STATIC = (function () {
         };
         return {
           name: window.BOMVOYAGE_SNAPSHOT_META.name || ".",
+          repo_spec: window.BOMVOYAGE_SNAPSHOT_META.repo_spec || null,
           version: window.BOMVOYAGE_SNAPSHOT_META.tool_version || "",
           head_sha: headSha,
           last_scanned_at: row.scanned_at || "",
