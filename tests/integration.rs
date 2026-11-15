@@ -25,8 +25,30 @@ fn git(dir: &Path, args: &[&str]) {
 /// One scripted commit: set Cargo.toml content, commit with a fixed author
 /// and date so attribution asserts are deterministic.
 fn commit(dir: &Path, name: &str, email: &str, date: &str, message: &str, cargo_toml: &str) {
-    std::fs::write(dir.join("Cargo.toml"), cargo_toml).unwrap();
-    git(dir, &["add", "Cargo.toml"]);
+    commit_full(
+        dir,
+        name,
+        email,
+        date,
+        message,
+        &[("Cargo.toml", cargo_toml)],
+    );
+}
+
+/// Multi-file variant: writes every (`path`, `content`) pair, stages, and
+/// commits with a fixed author/date.
+fn commit_full(
+    dir: &Path,
+    name: &str,
+    email: &str,
+    date: &str,
+    message: &str,
+    files: &[(&str, &str)],
+) {
+    for (path, content) in files {
+        std::fs::write(dir.join(path), content).unwrap();
+        git(dir, &["add", path]);
+    }
     git(
         dir,
         &[
@@ -210,13 +232,56 @@ fn detailed_mode_properties_survive_rescan() {
     let repo = tmp.path().join("demo");
     std::fs::create_dir(&repo).expect("create repo dir");
     git(&repo, &["init", "-q", "-b", "main"]);
-    commit(
+
+    // A minimal Cargo.lock: versioned purls with real DECLARES intervals —
+    // what LIVE_PACKAGES / DETAILED_TARGETS / the graph endpoint need.
+    let cargo_lock = |pkgs: &[(&str, &str)]| {
+        let mut s = String::new();
+        for (name, version) in pkgs {
+            s.push_str(&format!(
+                "[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n\n"
+            ));
+        }
+        s
+    };
+    commit_full(
         &repo,
         "Ada",
         "ada@example.com",
         "2024-01-01T12:00:00+00:00",
         "add serde",
-        &cargo_toml(&[("serde", "1.0.100")]),
+        &[
+            ("Cargo.toml", &cargo_toml(&[("serde", "1.0.100")])),
+            ("Cargo.lock", &cargo_lock(&[("serde", "1.0.100")])),
+        ],
+    );
+    commit_full(
+        &repo,
+        "Ada",
+        "ada@example.com",
+        "2024-02-01T12:00:00+00:00",
+        "bump serde",
+        &[
+            ("Cargo.toml", &cargo_toml(&[("serde", "1.0.200")])),
+            ("Cargo.lock", &cargo_lock(&[("serde", "1.0.200")])),
+        ],
+    );
+    commit_full(
+        &repo,
+        "Grace",
+        "grace@example.com",
+        "2024-03-01T12:00:00+00:00",
+        "add tokio",
+        &[
+            (
+                "Cargo.toml",
+                &cargo_toml(&[("serde", "1.0.200"), ("tokio", "1.0.0")]),
+            ),
+            (
+                "Cargo.lock",
+                &cargo_lock(&[("serde", "1.0.200"), ("tokio", "1.0.0")]),
+            ),
+        ],
     );
 
     let db = tmp.path().join("bomvoyage.rl");
@@ -242,7 +307,10 @@ fn detailed_mode_properties_survive_rescan() {
         write::str_row(
             &mut r,
             "depsdev_url",
-            "https://deps.dev/cargo/serde/1.0.100",
+            &format!(
+                "https://deps.dev/cargo/serde/{}",
+                purl.rsplit('@').next().unwrap_or("")
+            ),
         );
         write::str_row(&mut r, "depsdev_status", "ok");
         r.insert("fetched_at".into(), Value::Int(1234));
@@ -255,41 +323,39 @@ fn detailed_mode_properties_survive_rescan() {
         r
     }
 
+    const SERDE_100: &str = "pkg:cargo/serde@1.0.100";
+    const SERDE_200: &str = "pkg:cargo/serde@1.0.200";
+    const GHSA_ROW: &str = r#"[{"id":"GHSA-xxxx-yyyy-zzzz","aliases":["CVE-2024-0001"]}]"#;
+
     // (A `.rl` bundle holds one open handle at a time — scope each writer.)
     {
         let graph = bomvoyage::graph::SbomGraph::open_writable(&db).expect("db opens");
         let mut conn = graph.db.connect().expect("connect");
 
-        // Before: no detailed data anywhere. The test repo has no lockfile,
-        // so its serde package has an empty version — create the versioned
-        // node detailed mode would find on a lockfile-derived repo (the
-        // detailed write MATCHes; it never creates Package nodes).
-        conn.query(
-            "MERGE (p:Package {purl: 'pkg:cargo/serde@1.0.100'})
-             SET p.name = 'serde', p.ecosystem = 'cargo', p.version = '1.0.100'",
-        )
-        .expect("seed node");
+        // Before: no detailed data anywhere.
         let before = conn
-            .query("MATCH (p:Package {purl: 'pkg:cargo/serde@1.0.100'}) RETURN p.vulns AS v")
+            .query(&format!(
+                "MATCH (p:Package {{purl: '{SERDE_100}'}}) RETURN p.vulns AS v"
+            ))
             .expect("query");
         assert_eq!(before.rows[0][0], Value::Null, "no vulns property yet");
 
-        // Apply a hand-built detailed row through the production write path.
+        // Apply hand-built detailed rows through the production write path:
+        // serde 1.0.100 carries advisories, 1.0.200 is clean.
         bomvoyage::depsdev::apply_rows(
             &mut conn,
-            vec![detailed_row(
-                "pkg:cargo/serde@1.0.100",
-                2,
-                r#"[{"id":"GHSA-xxxx-yyyy-zzzz","aliases":["CVE-2024-0001"]}]"#,
-            )],
+            vec![
+                detailed_row(SERDE_100, 2, GHSA_ROW),
+                detailed_row(SERDE_200, 0, "[]"),
+            ],
         )
         .expect("apply runs");
 
         let result = conn
-            .query(
-                "MATCH (p:Package {purl: 'pkg:cargo/serde@1.0.100'})
-                 RETURN p.vulns AS vulns, p.license AS license, p.advisories AS advisories, p.homepage AS home",
-            )
+            .query(&format!(
+                "MATCH (p:Package {{purl: '{SERDE_100}'}})
+                 RETURN p.vulns AS vulns, p.license AS license, p.advisories AS advisories, p.homepage AS home"
+            ))
             .expect("query");
         let col = |name: &str| {
             result
@@ -306,7 +372,7 @@ fn detailed_mode_properties_survive_rescan() {
         );
         assert_eq!(
             result.rows[0][col("advisories")].as_string(),
-            Some(r#"[{"id":"GHSA-xxxx-yyyy-zzzz","aliases":["CVE-2024-0001"]}]"#)
+            Some(GHSA_ROW)
         );
         assert_eq!(
             result.rows[0][col("home")].as_string(),
@@ -315,7 +381,163 @@ fn detailed_mode_properties_survive_rescan() {
         // conn and graph drop here: a .rl bundle holds one open handle.
     }
 
-    // /api/meta now reports the detailed package — the UI condition for
+    // --- GAP 1: time-correctness of the detailed columns in
+    // LIVE_PACKAGES — a version live at as-of reports THAT version's
+    // advisories, and a superseded version drops out.
+    let live_at = |conn: &mut relate::Connection, as_of: &str, purl: &str| -> (Value, Value) {
+        let mut params = std::collections::BTreeMap::new();
+        params.insert("as_of".to_string(), Value::String(as_of.to_string().into()));
+        let result = conn
+            .query_with_params(bomvoyage::graph::queries::LIVE_PACKAGES, params)
+            .expect("live query");
+        let cpurl = result
+            .header
+            .columns
+            .iter()
+            .position(|c| c == "purl")
+            .unwrap();
+        let cv = result
+            .header
+            .columns
+            .iter()
+            .position(|c| c == "vulns")
+            .unwrap();
+        let cadv = result
+            .header
+            .columns
+            .iter()
+            .position(|c| c == "advisories")
+            .unwrap();
+        for row in &result.rows {
+            if row.get(cpurl).and_then(|v| v.as_string()) == Some(purl) {
+                return (
+                    row.get(cv).cloned().unwrap_or(Value::Null),
+                    row.get(cadv).cloned().unwrap_or(Value::Null),
+                );
+            }
+        }
+        (Value::Null, Value::Null)
+    };
+    {
+        let graph = bomvoyage::graph::SbomGraph::open_read_only(&db).expect("reopen");
+        let mut conn = graph.db.connect().expect("connect");
+        // January: serde 1.0.100 live, carrying its 2 advisories.
+        let (v, adv) = live_at(&mut conn, "2024-01-15T00:00:00Z", SERDE_100);
+        assert_eq!(
+            v,
+            Value::Int(2),
+            "serde 1.0.100 live in January with vulns=2"
+        );
+        assert_eq!(adv.as_string(), Some(GHSA_ROW));
+        let (v2, _) = live_at(&mut conn, "2024-01-15T00:00:00Z", SERDE_200);
+        assert_eq!(
+            v2,
+            Value::Null,
+            "serde 1.0.200 does not exist yet in January"
+        );
+        // March: 1.0.200 live and clean; 1.0.100 gone from the live set.
+        let (v, adv) = live_at(&mut conn, "2024-03-15T00:00:00Z", SERDE_200);
+        assert_eq!(v, Value::Int(0), "serde 1.0.200 live in March, clean");
+        assert_eq!(adv.as_string(), Some("[]"));
+        let (v, _) = live_at(&mut conn, "2024-03-15T00:00:00Z", SERDE_100);
+        assert_eq!(v, Value::Null, "serde 1.0.100 no longer live in March");
+    }
+
+    // --- GAP 2: DETAILED_TARGETS excludes the generic root node and
+    // version-less packages (they cannot hit the per-version endpoint).
+    {
+        let graph = bomvoyage::graph::SbomGraph::open_read_only(&db).expect("reopen");
+        let mut conn = graph.db.connect().expect("connect");
+        let result = conn
+            .query(bomvoyage::graph::queries::DETAILED_TARGETS)
+            .expect("targets query");
+        let cp = result
+            .header
+            .columns
+            .iter()
+            .position(|c| c == "purl")
+            .unwrap();
+        let purls: Vec<String> = result
+            .rows
+            .iter()
+            .filter_map(|r| r.get(cp).and_then(|v| v.as_string().map(str::to_string)))
+            .collect();
+        assert!(
+            purls.iter().any(|p| p == SERDE_100),
+            "targets include serde 1.0.100"
+        );
+        assert!(
+            purls.iter().any(|p| p == SERDE_200),
+            "targets include serde 1.0.200"
+        );
+        assert!(
+            !purls.iter().any(|p| p.starts_with("pkg:generic/")),
+            "the root node is never a target: {purls:?}"
+        );
+        assert!(
+            purls
+                .iter()
+                .all(|p| p.rsplit('@').next().map(|v| !v.is_empty()).unwrap_or(false)),
+            "every target has a version (manifest-only deps excluded): {purls:?}"
+        );
+    }
+
+    // --- GAP 3: /api/graph node data carries the detailed fields —
+    // vulns as a number, advisories parsed into a real JSON array only
+    // when vulns > 0, license/license links present, clean nodes null.
+    {
+        let api = bomvoyage::server::api::Api {
+            db: std::sync::Arc::new(relate::Database::open(&db.to_string_lossy()).expect("open")),
+            repo_name: "demo".into(),
+        };
+        let g = api
+            .graph(Some("2024-01-15T23:59:59Z"), None)
+            .expect("graph query");
+        let nodes = g["elements"]["nodes"]
+            .as_array()
+            .expect("nodes array")
+            .clone();
+        let serde100 = nodes
+            .iter()
+            .find(|n| n["data"]["id"] == SERDE_100)
+            .unwrap_or_else(|| panic!("serde 1.0.100 in the as-of graph: {nodes:?}"));
+        assert_eq!(serde100["data"]["vulns"], 2, "vulns is a JSON number");
+        assert_eq!(serde100["data"]["license"], "MIT OR Apache-2.0");
+        assert_eq!(
+            serde100["data"]["advisories"][0]["id"], "GHSA-xxxx-yyyy-zzzz",
+            "advisories must be a parsed array, not a JSON string"
+        );
+        assert_eq!(
+            serde100["data"]["depsdev_url"],
+            "https://deps.dev/cargo/serde/1.0.100"
+        );
+        // conn and graph drop here: a .rl bundle holds one open handle.
+    }
+    {
+        let api = bomvoyage::server::api::Api {
+            db: std::sync::Arc::new(relate::Database::open(&db.to_string_lossy()).expect("open")),
+            repo_name: "demo".into(),
+        };
+        let g = api
+            .graph(Some("2024-03-15T23:59:59Z"), None)
+            .expect("graph query");
+        let nodes = g["elements"]["nodes"]
+            .as_array()
+            .expect("nodes array")
+            .clone();
+        let serde200 = nodes
+            .iter()
+            .find(|n| n["data"]["id"] == SERDE_200)
+            .expect("serde 1.0.200 in the March graph");
+        assert_eq!(serde200["data"]["vulns"], 0);
+        assert!(
+            serde200["data"]["advisories"].is_null(),
+            "a clean node carries no advisories payload: {}",
+            serde200["data"]["advisories"]
+        );
+    }
+
+    // /api/meta now reports the detailed packages — the UI condition for
     // offering the vulnerable-deps preset.
     {
         let api = bomvoyage::server::api::Api {
@@ -323,7 +545,7 @@ fn detailed_mode_properties_survive_rescan() {
             repo_name: "demo".into(),
         };
         let meta = api.meta().expect("meta");
-        assert_eq!(meta["detailed_packages"], 1, "one detailed package now");
+        assert_eq!(meta["detailed_packages"], 2, "two detailed packages now");
     }
 
     // A full rescan (what serve's background walker does) must preserve the
@@ -333,7 +555,9 @@ fn detailed_mode_properties_survive_rescan() {
         let graph = bomvoyage::graph::SbomGraph::open_writable(&db).expect("db reopens");
         let mut conn = graph.db.connect().expect("connect");
         let result = conn
-            .query("MATCH (p:Package {purl: 'pkg:cargo/serde@1.0.100'}) RETURN p.vulns AS v")
+            .query(&format!(
+                "MATCH (p:Package {{purl: '{SERDE_100}'}}) RETURN p.vulns AS v"
+            ))
             .expect("query");
         assert_eq!(
             result.rows[0][0],
@@ -343,7 +567,7 @@ fn detailed_mode_properties_survive_rescan() {
 
         // Re-applying with different values overwrites (re-runnable).
         let mut r = Row::new();
-        write::str_row(&mut r, "purl", "pkg:cargo/serde@1.0.100");
+        write::str_row(&mut r, "purl", SERDE_100);
         write::str_row(&mut r, "depsdev_url", "");
         write::str_row(&mut r, "depsdev_status", "not_found");
         r.insert("fetched_at".into(), Value::Int(99));
@@ -355,7 +579,9 @@ fn detailed_mode_properties_survive_rescan() {
         r.insert("deprecated".into(), Value::Bool(false));
         bomvoyage::depsdev::apply_rows(&mut conn, vec![r]).expect("re-apply runs");
         let result = conn
-            .query("MATCH (p:Package {purl: 'pkg:cargo/serde@1.0.100'}) RETURN p.vulns AS v, p.depsdev_status AS s")
+            .query(&format!(
+                "MATCH (p:Package {{purl: '{SERDE_100}'}}) RETURN p.vulns AS v, p.depsdev_status AS s"
+            ))
             .expect("query");
         assert_eq!(result.rows[0][0], Value::Int(0), "overwritten");
         assert_eq!(result.rows[0][1].as_string(), Some("not_found"));

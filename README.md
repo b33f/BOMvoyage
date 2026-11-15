@@ -48,13 +48,18 @@ Open the URL: an interactive dependency graph with a **time-travel slider** — 
 back to any commit and watch the SBOM shrink to what the repo depended on that day.
 Time travel glides: packages that exist on both days keep their exact spot
 (nothing moves on days where nothing changed), and on changed days the
-remaining nodes animate smoothly to their new places. A dependency that
-first appears arrives **purple with a pink outline** and fades to the
-standard green as it settles in beside its dependents. The sweep controls
+remaining nodes animate smoothly to their new places. Arriving dependencies
+flash their arrival colors (a second legend box beside the canvas legend
+explains them): a **newly added dependency arrives purple**, a **version
+update arrives yellow** on the replaced version's spot — each outlined in
+pink while it lands, then fading to the package's standing color: **green**,
+or **red** when the version ships with known security advisories (a
+vulnerable package never animates as green). The sweep controls
 (⏮ ▶ ⏸) play the whole history day by day as an animation — each step
 waits for the day's motion to finish before advancing, so nothing is
 chopped mid-glide — and **4×** quadruples the playback speed; pausing
-freezes the frame instantly.
+freezes the frame instantly. Drag a developer or repo-area hub and, past
+the first ~100px of travel, its dependencies come along as one unit.
 Click any package to see **who added it, when, its full version timeline, and every
 file that uses it**; click a developer or repo-area hub to list the dependencies
 attributed to it. The raw-Cypher box at the bottom shows the temporal query behind

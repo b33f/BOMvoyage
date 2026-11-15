@@ -163,8 +163,9 @@ impl Api {
         }))
     }
 
-    /// The as-of dependency graph in cytoscape's elements shape.
-    fn graph(
+    /// The as-of dependency graph in cytoscape's elements shape. Public for
+    /// the integration tests.
+    pub fn graph(
         &self,
         as_of: Option<&str>,
         _depth: Option<&str>,
