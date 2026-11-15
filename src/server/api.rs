@@ -337,7 +337,7 @@ impl Api {
     /// OWN database file (nothing from two repos ever mixes), and hot-swap
     /// the served database. Loopback-only server, spec-validated — the same
     /// trust level as the read-only console.
-    fn scan_repo(&self, body: &[u8]) -> std::io::Result<serde_json::Value> {
+    pub fn scan_repo(&self, body: &[u8]) -> std::io::Result<serde_json::Value> {
         let parsed: serde_json::Value = match serde_json::from_slice(body) {
             Ok(v) => v,
             Err(_) => return Ok(serde_json::json!({ "error": "missing repo" })),

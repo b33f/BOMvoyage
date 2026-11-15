@@ -202,15 +202,24 @@ snapshot the page replays into the **WASM build of RelateDB**
 the whole explorer, including time travel, red-triangle vulnerabilities and
 the Cypher console, runs in the browser with no server and no database
 file. URLs are relative, so it works under a subpath of an existing site.
-The toolbar gains an **on-demand box** (github org/repo): entering a repo
-scans its CURRENT dependencies in the browser (GitHub public API) — no time
-travel or usage sites for on-demand repos (a browser can't run git); the
-pre-built snapshot is the full-fidelity view. In repo mode the box
-prepopulates: the current org's ten most-starred repos as dropdown
-suggestions (any typed org/repo still scans). Note: the published artifact
-exposes the repository's dependency history, including committer names and
-emails. The WASM engine is Chromium-tested (upstream); other browsers
-untested.
+Note: the published artifact exposes the repository's dependency history,
+including committer names and emails. The WASM engine is Chromium-tested
+(upstream); other browsers untested.
+
+### The repo box — every mode
+
+The explorer's toolbar always has a **repo box** (github org/repo) — server
+mode and static alike. It prepopulates from whatever is loaded: the box
+shows the current spec and offers the current org's ten most-starred repos
+as dropdown suggestions (any typed org/repo still scans).
+
+- **Server mode**: Scan hands the spec to the server (`POST /api/scan-repo`)
+  — it clones/refreshes the repo, scans it fully into its own database
+  file, and hot-swaps what the explorer serves. Full time travel.
+- **Static site**: Scan fetches the repo's CURRENT dependencies in the
+  browser (GitHub public API) and rebuilds the in-memory graph — no time
+  travel or usage sites for on-demand repos (a browser can't run git); the
+  pre-built snapshot is the full-fidelity view.
 
 ### Self-update
 

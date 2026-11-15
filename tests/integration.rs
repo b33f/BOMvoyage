@@ -828,3 +828,39 @@ fn detailed_mode_runs_even_when_history_is_current() {
         "--vuln-details alone must warn: {stderr}"
     );
 }
+
+/// The server-mode URL box endpoint (`POST /api/scan-repo`) must reject
+/// malformed/hostile specs BEFORE any clone attempt — no network, no git,
+/// no db file created.
+#[test]
+fn scan_repo_endpoint_refuses_bad_specs_before_any_clone() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let db = tmp.path().join("bomvoyage.rl");
+    // (the validation path never touches the db — it runs before anything)
+    let api = bomvoyage::server::api::Api {
+        db: std::sync::RwLock::new(std::sync::Arc::new(
+            relate::Database::open(&db.to_string_lossy()).expect("open"),
+        )),
+        db_path: db.clone(),
+        repo_spec: std::sync::RwLock::new(None),
+        repo_name: "demo".into(),
+    };
+    for bad in ["../etc/passwd", "a/b/c", "just-a-name", "a/b; rm -rf /", ""] {
+        let body = serde_json::json!({ "repo": bad }).to_string();
+        let response = api.scan_repo(body.as_bytes()).expect("handler responds");
+        assert!(
+            response["error"].is_string(),
+            "spec {bad:?} must be refused: {response}"
+        );
+    }
+    // nothing was cloned, and no per-repo sibling db appeared
+    let siblings: Vec<_> = std::fs::read_dir(tmp.path())
+        .expect("read")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert!(
+        siblings.iter().all(|f| f == "bomvoyage.rl"),
+        "no per-repo db file may exist for refused specs: {siblings:?}"
+    );
+}

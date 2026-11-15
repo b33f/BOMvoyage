@@ -468,4 +468,29 @@ const eg = (s, t, k = "lockfile") => ({ data: { source: s, target: t, source_kin
     throw new Error("current-only declares must be always-live");
 }
 
+// --- the repo box dropdown: org listing, user fallback, typing freedom ---
+{
+  // /orgs/ 404s (user account); /users/ answers — the fallback must fire
+  sandbox.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("/orgs/b33f/repos")) return { ok: false, status: 404, json: async () => ({}) };
+    if (u.includes("/users/b33f/repos"))
+      return { ok: true, status: 200, json: async () => [{ name: "BOMvoyage", description: "the tool" }, { name: "ian" }] };
+    throw new Error("unexpected fetch: " + u);
+  };
+  el("repo-input").value = "";
+  await sandbox.window.BOMVOYAGE_ONDEMAND.noteSpec("b33f/BOMvoyage");
+  const opts = [...el("repo-suggestions").children].map((o) => o.value);
+  if (!opts.includes("b33f/BOMvoyage") || opts.length !== 2)
+    throw new Error(`user-account fallback must fill the datalist: ${JSON.stringify(opts)}`);
+  // free typing is never restricted by the suggestions
+  if (!sandbox.window.BOMVOYAGE_ONDEMAND.validSpec("typed/free")) throw new Error("typing must stay free");
+
+  // spec flows into the box only when it is empty (never clobbers typing)
+  el("repo-input").value = "typed/free";
+  await sandbox.window.BOMVOYAGE_ONDEMAND.noteSpec("neo4j/neo4j-java-driver");
+  if (el("repo-input").value !== "typed/free")
+    throw new Error("prefill must not clobber what the user typed");
+}
+
 console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes; version chip renders; diff + seeded-layout verified");

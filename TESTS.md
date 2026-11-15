@@ -11,7 +11,7 @@ Run everything locally with:
 $ cargo test
 ```
 
-The suite is 80 tests: 76 unit tests in the library and binary plus four end-to-end
+The suite is 81 tests: 76 unit tests in the library and binary plus five end-to-end
 integration tests (`tests/integration.rs`) that build a real git repository
 commit by commit and run the full scan → graph → temporal-query pipeline.
 
@@ -167,6 +167,7 @@ are pinned in the `embedded_ui_wiring_smoke` node harness with a stubbed engine.
 
 | Test | What it tests |
 |---|---|
+| `scan_repo_endpoint_refuses_bad_specs_before_any_clone` | The server-mode repo-box endpoint rejects malformed/hostile specs (`..`-traversal, extra slashes, shell text) BEFORE any clone: no network, no git, no per-repo db file created |
 | `temporal_sbom_end_to_end` | The whole product: a real git repository built commit by commit → `scan` → graph write → temporal Cypher (who added a dep, when, as-of queries at past dates) → idempotent rescan |
 | `detailed_mode_properties_survive_rescan` | Detailed-mode rows round-trip through the production write path, **survive a full rescan** (MERGE never clears unknown properties), and re-applying overwrites idempotently; also pins `/api/meta`'s `detailed_packages` (0 on an undetailed graph, 2 after) which the UI uses to offer the vulnerable-deps console preset; **time-correctness**: `LIVE_PACKAGES` at a past date reports the then-live version's own vulns/advisories (superseded versions drop out); `DETAILED_TARGETS` excludes the generic root node and version-less packages; `/api/graph` node data carries `vulns` as a number, `license`, `depsdev_url`, and `advisories` as a parsed array only when `vulns > 0` (clean nodes null) — no network, rows hand-built |
 | `detailed_mode_runs_even_when_history_is_current` | Drives the real binary: `scan --detailed` on a repo whose HEAD was already scanned must still run the detailed pass (the "history is current" short-circuit once returned before it — the silently-empty-enrichment bug); `--more-detailed` **implies** `--detailed` (enriches alone, never demands the other flag); plain `--vuln-details` alone still warns. Network-free: offline lookups warn and exit 0 |
