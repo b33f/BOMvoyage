@@ -4,7 +4,7 @@ This file lists the third-party Rust crates distributed inside the `bomvoyage`
 binary, and the license texts they carry. The copyright and license notices
 are retained here as those licenses require for redistribution.
 
-Crate count: 252. Generated from the crates' own manifests and
+Crate count: 257. Generated from the crates' own manifests and
 license files (see the crates.io package of each crate for its full source).
 
 ## License inventory
@@ -119,6 +119,7 @@ license files (see the crates.io package of each crate for its full source).
 ### `MIT`
 
 - atoi 2.0.0
+- block2 0.6.2
 - bytes 1.12.1
 - cfg_aliases 0.2.2
 - crunchy 0.2.4
@@ -127,6 +128,8 @@ license files (see the crates.io package of each crate for its full source).
 - integer-encoding 3.0.4
 - libm 0.2.16
 - nix 0.31.3
+- objc2 0.6.5
+- objc2-encode 4.1.0
 - ordered-float 5.5.1
 - phf 0.12.1
 - phf_shared 0.12.1
@@ -285,6 +288,7 @@ license files (see the crates.io package of each crate for its full source).
 ### `MIT/Apache-2.0`
 
 - arraydeque 0.5.1
+- ctrlc 3.5.2
 - filetime 0.2.29
 - lexical-core 1.0.6
 - lexical-parse-float 1.0.6
@@ -328,6 +332,7 @@ license files (see the crates.io package of each crate for its full source).
 
 ### `Zlib OR Apache-2.0 OR MIT`
 
+- dispatch2 0.3.1
 - tinyvec 1.13.3
 
 ## License texts

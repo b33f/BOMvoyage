@@ -11,7 +11,7 @@ Run everything locally with:
 $ cargo test
 ```
 
-The suite is 71 tests: 68 unit tests in the library plus three end-to-end
+The suite is 72 tests: 69 unit tests in the library plus three end-to-end
 integration tests (`tests/integration.rs`) that build a real git repository
 commit by commit and run the full scan → graph → temporal-query pipeline.
 
@@ -89,6 +89,7 @@ commit by commit and run the full scan → graph → temporal-query pipeline.
 | `query_param_takes_first_value` | Repeated query params take the first value; absent params return `None` |
 | `embedded_ui_scripts_parse` | Every embedded UI script (`app.js`, `search.js`) parses under `node --check` — the hand-rolled JS has no build step, so a syntax error ships silently and blanks the explorer (skipped where `node` is absent; CI always has it, plus an explicit lint-job gate) |
 | `index_references_only_embedded_assets` | `index.html` references only scripts/styles the server actually embeds and routes |
+| `serve_shuts_down_on_flag` | The serve accept loop observes the shutdown flag and returns promptly — what makes Ctrl+C a clean stop (stop accepting → wait for the history walk) instead of a default signal kill; no signals in the test, the flag is set directly |
 | `embedded_ui_wiring_smoke` | Behavior of the real `app.js` run in node (`tests/ui_smoke.mjs`, stubbed DOM + fetch, offline, two worlds): on a detailed graph `init()` executes end-to-end and the "Vulnerable deps + who added them" preset appears **exactly once** (splicing it into the preset array *and* button-injecting it once duplicated it); packages render green (`#3fb950`) in **every** mode, with red triangles marking vulnerable ones |
 
 ## Self-update (`src/update.rs`)

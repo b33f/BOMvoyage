@@ -6,7 +6,10 @@ pub mod api;
 pub mod http;
 
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use relate::Database;
 
@@ -19,19 +22,76 @@ pub const SEARCH_JS: &str = include_str!("../ui/search.js");
 pub const STYLE_CSS: &str = include_str!("../ui/style.css");
 pub const CYTOSCAPE_JS: &[u8] = include_bytes!("../ui/vendor/cytoscape.min.js");
 
-/// Serve until SIGINT/SIGTERM. One thread per connection; each request opens
-/// its own engine connection from the shared `Database`.
-pub fn serve(db: Arc<Database>, repo_name: &str, port: u16) -> std::io::Result<()> {
+/// Set by the first Ctrl+C; the serve loop polls it between accepts.
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+/// Install the Ctrl+C / SIGTERM handler (the serve path only). First press
+/// requests a graceful shutdown: the explorer stops accepting and waits,
+/// bounded, for the background history walk to finish — a deliberate exit
+/// instead of the default signal kill, which is the safer mid-WAL-write
+/// default. A second press force-quits.
+pub fn install_shutdown_handler() {
+    let result = ctrlc::set_handler(|| {
+        if SHUTDOWN.swap(true, Ordering::SeqCst) {
+            std::process::exit(130);
+        }
+        eprintln!("shutting down — press Ctrl+C again to force quit");
+    });
+    if let Err(e) = result {
+        eprintln!("warning: could not install the Ctrl+C handler ({e}); default kill applies");
+    }
+}
+
+/// Serve until SIGINT/SIGTERM (or `SHUTDOWN`, which the tests set directly).
+/// One thread per connection; each request opens its own engine connection
+/// from the shared `Database`.
+///
+/// `history_done` is the completion signal of the background history walker
+/// (see `scan_and_serve`); when shutting down we wait, bounded, for the walk
+/// to finish so its last batches and the final checkpoint land in the file.
+/// In-flight connection threads are not joined — each already has a 30s
+/// read timeout, and the process exit reclaims them.
+pub fn serve(
+    db: Arc<Database>,
+    repo_name: &str,
+    port: u16,
+    history_done: Option<mpsc::Receiver<()>>,
+) -> std::io::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
-    eprintln!("BOMvoyage explorer: http://127.0.0.1:{port}");
+    let addr = listener.local_addr()?;
+    eprintln!("BOMvoyage explorer: http://127.0.0.1:{}", addr.port());
     let api = Arc::new(Api {
         db,
         repo_name: repo_name.to_string(),
     });
-    for stream in listener.incoming() {
-        let Ok(stream) = stream else { continue };
-        let api = Arc::clone(&api);
-        std::thread::spawn(move || handle_connection(stream, &api));
+    // Non-blocking accept + poll: the blocking `incoming()` iterator cannot
+    // observe the shutdown flag while it waits.
+    listener.set_nonblocking(true)?;
+    loop {
+        if SHUTDOWN.load(Ordering::SeqCst) {
+            break;
+        }
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let api = Arc::clone(&api);
+                std::thread::spawn(move || handle_connection(stream, &api));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    eprintln!("explorer stopped");
+    if let Some(done) = history_done {
+        eprintln!("waiting up to 2 minutes for the background history walk to finish …");
+        match done.recv_timeout(Duration::from_secs(120)) {
+            Ok(()) => eprintln!("history walk finished — everything is saved"),
+            Err(_) => eprintln!(
+                "warning: the history walk is still running — progress committed so far is \
+                 saved, and the next scan completes the rest"
+            ),
+        }
     }
     Ok(())
 }
@@ -150,5 +210,32 @@ mod tests {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+
+    /// The serve loop must observe the shutdown flag and return promptly —
+    /// this is what makes Ctrl+C a clean stop instead of a signal kill.
+    /// (No signals in the test: the flag is set directly, CI-portably.)
+    #[test]
+    fn serve_shuts_down_on_flag() {
+        let worker = std::thread::spawn(|| {
+            let db = relate::Database::open_with(
+                ":memory:",
+                relate::OpenOptions {
+                    mode: relate::OpenMode::Ephemeral,
+                    ..relate::OpenOptions::default()
+                },
+            )
+            .expect("ephemeral db opens");
+            super::serve(
+                std::sync::Arc::new(db),
+                "shutdown-test",
+                0, // ephemeral port; no request is ever made
+                None,
+            )
+            .expect("serve returns cleanly on shutdown");
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        SHUTDOWN.store(true, Ordering::SeqCst);
+        worker.join().expect("serve returns on shutdown");
     }
 }

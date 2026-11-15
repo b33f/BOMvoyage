@@ -172,6 +172,11 @@ fn scan_and_serve(
         });
     }
 
+    // Ctrl+C: graceful shutdown. The first press lets the scan (if one is
+    // running) and the history walk finish and get saved; the second force-
+    // quits. Without this, SIGINT kills the process mid-WAL-write.
+    server::install_shutdown_handler();
+
     let head = scan::git::head_sha(path)?;
     let history_current = graph::stored_history_head(&db)?.as_deref() == Some(head.as_str());
 
@@ -203,7 +208,10 @@ fn scan_and_serve(
         }
     }
 
-    if !history_current {
+    // The walker signals completion so a Ctrl+C during serving can wait,
+    // bounded, for its final batches and checkpoint to land.
+    let history_done = if !history_current {
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
         let bg_path = path.to_path_buf();
         let bg_db = Arc::clone(&db);
         std::thread::spawn(move || {
@@ -218,24 +226,28 @@ fn scan_and_serve(
                 Ok(out) => {
                     if let Err(e) = graph::write_scan(&bg_db, &out) {
                         eprintln!("background history write failed: {e}");
-                        return;
+                    } else {
+                        // Versions first revealed by the full history walk get
+                        // their detailed data now; the cache makes this pass
+                        // nearly free when the flag ran before serving.
+                        if detailed {
+                            run_detailed(&bg_db, vuln_details, false);
+                        }
+                        eprintln!(
+                            "background: history complete — {} packages across {} commits, time travel ready",
+                            out.packages.len(),
+                            out.commits.len()
+                        );
                     }
-                    // Versions first revealed by the full history walk get
-                    // their detailed data now; the cache makes this pass
-                    // nearly free when the flag ran before serving.
-                    if detailed {
-                        run_detailed(&bg_db, vuln_details, false);
-                    }
-                    eprintln!(
-                        "background: history complete — {} packages across {} commits, time travel ready",
-                        out.packages.len(),
-                        out.commits.len()
-                    );
                 }
                 Err(e) => eprintln!("background history scan failed: {e}"),
             }
+            let _ = done_tx.send(());
         });
-    }
+        Some(done_rx)
+    } else {
+        None
+    };
 
     let repo_name = project_name(&db)?;
     if open_browser {
@@ -251,7 +263,7 @@ fn scan_and_serve(
         };
         let _ = opened;
     }
-    server::serve(db, &repo_name, port)?;
+    server::serve(db, &repo_name, port, history_done)?;
     Ok(())
 }
 

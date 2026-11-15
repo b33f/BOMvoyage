@@ -78,6 +78,11 @@ findings:
   file counts are capped, and hitting a cap warns loudly — a hostile repository
   cannot exhaust memory through a huge lockfile or history without a visible
   warning.
+- **Ctrl+C on the serve path is a graceful shutdown, not a signal kill**: the
+  first press stops the explorer accepting and waits up to 2 minutes for the
+  background history walk to commit its last batches and checkpoint; the
+  second press force-quits. An interrupted walk leaves the graph honestly
+  marked incomplete (the next scan completes it) — never half-claimed.
 - **Release artifacts are reproducible-ish and checksummed**: every release
   ships a SHA-256 checksum per platform archive, built by the tagged CI
   workflow from a clean checkout.

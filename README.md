@@ -50,7 +50,9 @@ The sweep controls (⏮ ▶ ⏸) play the whole history day by day as an animati
 Click any package to see **who added it, when, its full version timeline, and every
 file that uses it**; click a developer or repo-area hub to list the dependencies
 attributed to it. The raw-Cypher box at the bottom shows the temporal query behind
-the view you're looking at.
+the view you're looking at. Ctrl+C shuts down cleanly: the explorer stops accepting
+and waits (up to 2 minutes) for the background history walk to finish saving;
+press Ctrl+C again to force-quit immediately.
 
 All screenshots below are real BOMvoyage sessions over the
 [neo4j-java-driver](https://github.com/neo4j/neo4j-java-driver) repository
