@@ -161,6 +161,8 @@ kbd {
 #play-controls { display: inline-flex; align-items: center; gap: 2px; }
 #play-controls .icon-btn { padding: 3px 6px; }
 #play-controls.playing #pause-btn { color: var(--accent); border-color: var(--accent); }
+#rate-btn { font-size: 11px; padding: 3px 8px; font-variant-numeric: tabular-nums; }
+#rate-btn.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 /* Fixed at the width of a full date (10 mono chars), so swapping to "HEAD"
    never resizes the button — and never re-flexes the slider beside it. */
 #asof-chip {

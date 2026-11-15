@@ -15,6 +15,12 @@ const ECOSYSTEM_COLORS = {
 /// is always the one non-green shape on the canvas.
 const PACKAGE_GREEN = "#3fb950";
 
+/// Base duration of graph motion (layout glides, fan animation). The 2×
+/// control halves it — and halves the sweep pacing — while it's active.
+const ANIM_MS = 450;
+let playbackRate = 1;        // 1 or 2 (the 2× toggle)
+let runningLayout = null;    // layout whose animation is in flight (stoppable on pause)
+
 /// Node kinds a query can return, with their canvas look. Package nodes are
 /// coloured by ecosystem instead.
 const KIND_STYLES = {
@@ -296,7 +302,7 @@ function layoutOptions(n, seeded) {
       return {
         name: "concentric",
         animate: !!seeded,
-        animationDuration: 300,
+        animationDuration: ANIM_MS / playbackRate,
         concentric: (x) => (ring.has(x.id()) ? -ring.get(x.id()) : 1),
         levelWidth: () => 1,
         minNodeSpacing: 22,
@@ -307,9 +313,9 @@ function layoutOptions(n, seeded) {
   return {
     name: "cose",
     // Seeded ("end"): the layout computes against current positions, then
-    // nodes interpolate to their new spots over 300ms — a glide, not a hop.
+    // nodes interpolate to their new spots — a glide, not a hop.
     animate: seeded ? "end" : false,
-    animationDuration: 300,
+    animationDuration: ANIM_MS / playbackRate,
     randomize: !seeded,
     nodeRepulsion: () => (n > 150 ? 9000 : 6000),
     idealEdgeLength: () => (n > 150 ? 50 : 70),
@@ -342,7 +348,10 @@ function applyAreasLayout(animate) {
   const R = Math.max(170, (fans.reduce((s, f) => s + 2 * f.pr, 0) / tau) * 1.35);
   const place = (node, x, y) => {
     if (animate && node.animate) {
-      node.animate({ position: { x, y } }, { duration: 300, easing: "ease-in-out" });
+      node.animate(
+        { position: { x, y } },
+        { duration: ANIM_MS / playbackRate, easing: "ease-in-out" }
+      );
     } else {
       node.position({ x, y });
     }
@@ -537,7 +546,10 @@ function rebuildGraph(elements) {
   // graph is perfectly stable between days that differ in nothing.
   if (changed) {
     if (!(handPlaced && applyAreasLayout(!full))) {
-      cy.layout(layoutOptions(elements.nodes.length, !full)).run();
+      runningLayout = cy.layout(layoutOptions(elements.nodes.length, !full)).run();
+      runningLayout.on("layoutstop", () => {
+        runningLayout = null;
+      });
     }
     fitReasonably();
   }
@@ -913,6 +925,7 @@ async function init() {
   $("play-btn").addEventListener("click", () => startPlay());
   $("pause-btn").addEventListener("click", pausePlay);
   $("rewind-btn").addEventListener("click", rewindPlay);
+  $("rate-btn").addEventListener("click", toggleRate);
   $("scope-toggle").addEventListener("change", toggleScope);
   $("clear-query").addEventListener("click", clearQueryResult);
   for (const btn of document.querySelectorAll("[data-view]")) {
@@ -1126,7 +1139,21 @@ function pausePlay() {
   playing = false;
   clearTimeout(playTimer);
   playTimer = null;
+  // Freeze the frame: in-flight graph motion from the last rendered day
+  // snaps to its end state now — a paused sweep must not keep animating
+  // in the background.
+  if (runningLayout) {
+    runningLayout.stop();
+    runningLayout = null;
+  }
+  if (cy) cy.elements().stop(true, true);
   updatePlayButtons();
+}
+
+/// The 2× control: double-speed animations and sweep pacing.
+function toggleRate() {
+  playbackRate = playbackRate === 1 ? 2 : 1;
+  $("rate-btn").classList.toggle("active", playbackRate === 2);
 }
 
 /// Manual navigation is an implicit pause: the sweep must never fight the
@@ -1157,13 +1184,13 @@ function startPlay() {
     // ~30s for a full sweep, but never more than 2.5s parked on one day —
     // the provisional timeline (one day) would otherwise sit frozen for
     // the whole sweep budget.
-    const interval = Math.min(2500, Math.max(120, PLAY_SWEEP_MS / Math.max(days.length, 1)));
+    const interval = Math.min(2500, Math.max(120, PLAY_SWEEP_MS / Math.max(days.length, 1))) / playbackRate;
     const wait = Math.max(0, interval - (performance.now() - t0));
     playTimer = setTimeout(() => {
       if (!playing) return;
       slider.value = atEnd ? 0 : Number(slider.value) + 1;
       step();
-    }, atEnd ? PLAY_HOLD_MS : wait);
+    }, atEnd ? PLAY_HOLD_MS / playbackRate : wait);
   };
   step();
 }

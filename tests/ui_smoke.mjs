@@ -12,7 +12,7 @@ import { URL } from "node:url";
 const src = readFileSync(new URL("../src/ui/app.js", import.meta.url), "utf8");
 
 function makeEl(id) {
-  return {
+  const el = {
     id,
     textContent: "",
     innerHTML: "",
@@ -41,15 +41,26 @@ function makeEl(id) {
       return null;
     },
     remove() {},
-    classList: {
-      toggle() {},
-      add() {},
-      remove() {},
-      contains() {
-        return false;
-      },
+  };
+  const classes = new Set();
+  el.classList = {
+    toggle(c, force) {
+      const on = force === undefined ? !classes.has(c) : !!force;
+      if (on) classes.add(c);
+      else classes.delete(c);
+      el.className = [...classes].join(" ");
+    },
+    add(c) {
+      this.toggle(c, true);
+    },
+    remove(c) {
+      this.toggle(c, false);
+    },
+    contains(c) {
+      return classes.has(c);
     },
   };
+  return el;
 }
 
 /// Boot a fresh app.js world. `detailedPackages` feeds /api/meta so init()
@@ -207,9 +218,23 @@ const eg = (s, t, k = "lockfile") => ({ data: { source: s, target: t, source_kin
   const seeded = sandbox.layoutOptions(10, true);
   if (seeded.randomize !== false || seeded.animate === false)
     throw new Error(`seeded layout must not randomize and must animate: ${JSON.stringify(seeded)}`);
+  if (seeded.animationDuration !== 450)
+    throw new Error(`base animation is 450ms (50% slower than before), got ${seeded.animationDuration}`);
   const fresh = sandbox.layoutOptions(10);
   if (fresh.randomize !== true || fresh.animate !== false)
     throw new Error(`first-render layout must randomize, unanimated: ${JSON.stringify(fresh)}`);
+}
+// 2× toggle halves the animation duration
+{
+  sandbox.toggleRate();
+  const fast = sandbox.layoutOptions(10, true);
+  if (fast.animationDuration !== 225)
+    throw new Error(`2× must halve the animation duration, got ${fast.animationDuration}`);
+  if (!sandbox.document.getElementById("rate-btn").className.includes("active"))
+    throw new Error("rate button must be flagged active at 2×");
+  sandbox.toggleRate();
+  if (sandbox.layoutOptions(10, true).animationDuration !== 450)
+    throw new Error("toggling 2× off must restore the 450ms base");
 }
 
 console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes; version chip renders; diff + seeded-layout verified");
