@@ -356,6 +356,7 @@ function applyAreasLayout(animate) {
   // Ring circumference sized so adjacent fans stay pr_i + pr_j + gap apart.
   const R = Math.max(170, (fans.reduce((s, f) => s + 2 * f.pr, 0) / tau) * 1.35);
   const place = (node, x, y) => {
+    if (node.locked()) return; // pinned: persisting nodes never move
     if (animate && node.animate) {
       node.animate(
         { position: { x, y } },
@@ -560,9 +561,11 @@ function rebuildGraph(elements) {
   const isQuery = !!queryElements;
   const full = needsFullLayout || isQuery || lastRenderWasQuery;
   let changed = true;
-  // Version-bump nodes pinned on the replaced version's spot while the
-  // layout arranges the neighbourhood (released on layoutstop/timeout).
-  const heldReplacements = [];
+  // Nodes pinned while the incremental layout runs: persisting nodes (time
+  // travel never moves an existing node) and version-bump replacements
+  // (pinned on the replaced version's spot). Released on layoutstop or a
+  // timeout failsafe.
+  const heldNodes = [];
 
   // Dense canvases only label nodes once you zoom in — but the dependencies
   // view is hand-placed and spread out, so it always labels.
@@ -586,6 +589,19 @@ function rebuildGraph(elements) {
     const nextData = new Map(elements.nodes.map((n) => [n.data.id, n.data]));
     cy.batch(() => {
       if (changed) {
+        // Freeze the existing graph: every persisting node is locked so the
+        // incremental layout positions ONLY the new arrivals, around the
+        // untouched day-(N-1) arrangement. A green node that exists on both
+        // days therefore cannot jump — this is the whole point of the
+        // incremental path.
+        for (const id of diff.keptNodeIds) {
+          const n = cy.getElementById(id);
+          if (n.nonempty()) {
+            n.data(nextData.get(id));
+            n.lock();
+            heldNodes.push(n);
+          }
+        }
         // A version bump is a new purl (a Package node IS name+version):
         // when the diff removes pkg:x/y@OLD and adds pkg:x/y@NEW, the new
         // version takes over the old one's exact spot in the graph.
@@ -608,21 +624,20 @@ function rebuildGraph(elements) {
           const ele = cy.add({ data: Object.assign({}, n.data), position: pos });
           arriveWithFlourish(ele, n.data, replacement !== undefined);
           if (replacement) {
-            // Pin the new version on the old one's spot while the layout
-            // arranges the neighbourhood around it, then release it.
             ele.lock();
-            heldReplacements.push(ele);
+            heldNodes.push(ele);
           }
         }
         for (const e of diff.addedEdges) {
           cy.add({ data: Object.assign({}, e.data) });
         }
-      }
-      // Data refresh always runs — a node can change its label, scope or
-      // vulns count with its identity (and position) untouched.
-      for (const id of diff.keptNodeIds) {
-        const n = cy.getElementById(id);
-        if (n.nonempty()) n.data(nextData.get(id));
+      } else {
+        // Data refresh always runs — a node can change its label, scope or
+        // vulns count with its identity (and position) untouched.
+        for (const id of diff.keptNodeIds) {
+          const n = cy.getElementById(id);
+          if (n.nonempty()) n.data(nextData.get(id));
+        }
       }
     });
   }
@@ -636,15 +651,15 @@ function rebuildGraph(elements) {
       runningLayout = cy.layout(layoutOptions(elements.nodes.length, !full)).run();
       runningLayout.on("layoutstop", () => {
         runningLayout = null;
-        for (const e of heldReplacements) if (e.inside()) e.unlock();
-        heldReplacements.length = 0;
+        for (const e of heldNodes) if (e.inside()) e.unlock();
+        heldNodes.length = 0;
       });
     }
     // Failsafe: never leave a node locked if the layoutstop event is slow
     // or the areas layout path skipped it.
     setTimeout(() => {
-      for (const e of heldReplacements) if (e.inside()) e.unlock();
-      heldReplacements.length = 0;
+      for (const e of heldNodes) if (e.inside()) e.unlock();
+      heldNodes.length = 0;
     }, (ANIM_MS * 2) / playbackRate + 500);
     fitReasonably();
   }
