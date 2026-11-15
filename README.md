@@ -414,7 +414,9 @@ See [SECURITY.md](SECURITY.md) for how to report a vulnerability and what the
 tool's security model is (local-only binding, read-only Cypher enforcement,
 treats repository content as untrusted data) — including what the opt-in
 **detailed mode** network calls send to third parties (dependency names and
-versions to deps.dev; advisory IDs to OSV) and what they deliberately do not.
+versions to deps.dev; advisory IDs to OSV) and what they deliberately do
+not; how `--repo` cloning is allowlisted and validated; and what network
+calls a generated **static site** makes from a visitor's browser.
 
 Supply-chain gates on every PR: cargo-deny (RustSec advisories including
 known-malicious crates, crates.io-only sources, permissive licenses,

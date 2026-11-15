@@ -15,6 +15,7 @@ Node.js), replays their history, and writes one portable `.rl` graph file.
 ```console
 bomvoyage                          # scan current repo + serve explorer UI (opens browser, port 8334)
 bomvoyage scan [DIR] --db FILE     # scan only (--force to rescan unchanged HEAD, --max-commits N)
+bomvoyage --repo ORG/NAME          # clone a GitHub repo into the cache and explore that
 bomvoyage serve --db FILE [--port 8334] [--open]
 bomvoyage query --db FILE "CYPHER" # read-only openCypher against the graph, JSON out
 bomvoyage export --db FILE --format spdx|cyclonedx|json|csv [--as-of DATE|SHA] [-o FILE]
