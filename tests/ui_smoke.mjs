@@ -424,18 +424,41 @@ const eg = (s, t, k = "lockfile") => ({ data: { source: s, target: t, source_kin
       { type: "blob", path: "pom.xml" },
       { type: "blob", path: "lib/package.json" },
       { type: "blob", path: "node_modules/junk.json" },
+      { type: "blob", path: "sub dir/pom.xml" }, // space: must be percent-encoded
     ],
     truncated: false,
   });
   const pomText = '<project><dependencies><dependency><groupId>junit</groupId><artifactId>junit</artifactId><version>4.12</version></dependency></dependencies></project>';
-  sandbox.fetch = async (url) => ({
-    ok: true, status: 200,
-    json: async () => (String(url).includes("/git/trees/") ? JSON.parse(treeJson)
-      : String(url).includes("/commits/HEAD") ? { sha: "deadbeef" } : Promise.reject(new Error("unexpected " + url))),
-    text: async () => (String(url).includes("pom.xml") ? pomText
-      : JSON.stringify({ dependencies: { lodash: "4.17.21" } })),
-  });
+  // SECURITY: every request must be HTTPS to a GitHub host — the stub
+  // itself refuses anything else, so a scanRepo that wandered off-host
+  // would fail the test rather than silently fetch.
+  const seenUrls = [];
+  sandbox.fetch = async (url) => {
+    const u = String(url);
+    if (!/^https:\/\/(api\.github\.com|raw\.githubusercontent\.com|github\.com)\//.test(u)) {
+      throw new Error(`non-github fetch attempted: ${u}`);
+    }
+    seenUrls.push(u);
+    return {
+      ok: true, status: 200,
+      json: async () => (u.includes("/git/trees/") ? JSON.parse(treeJson)
+        : u.includes("/commits/HEAD") ? { sha: "deadbeef" } : Promise.reject(new Error("unexpected " + u))),
+      text: async () => (u.includes("pom.xml") ? pomText
+        : JSON.stringify({ dependencies: { lodash: "4.17.21" } })),
+    };
+  };
   const result = await od.scanRepo("neo4j/neo4j-java-driver");
+  if (!seenUrls.length || !seenUrls.every((u) => u.startsWith("https://"))) {
+    throw new Error("scanRepo must only make HTTPS GitHub requests");
+  }
+  // crafted filename characters must be percent-encoded, not passed raw
+  if (!seenUrls.some((u) => u.includes("/HEAD/sub%20dir/pom.xml"))) {
+    throw new Error(`manifest paths must be percent-encoded: ${seenUrls.find((u) => u.includes("pom.xml"))}`);
+  }
+  // adversarial dependency name: parsed verbatim (replay is parameterized,
+  // so hostile characters in names can never become code or cypher)
+  const nasty = od.parseManifest("package-json", JSON.stringify({ dependencies: { '": drop table; //': "1.0" } }));
+  if (nasty[0].name !== '": drop table; //') throw new Error("names must parse verbatim (no sanitization games)");
   const purls = result.stages.packages.map((p) => p.purl);
   if (!purls.includes("pkg:maven/junit/junit@4.12")) throw new Error("maven dep missing from stages");
   if (!purls.includes("pkg:npm/lodash@4.17.21")) throw new Error("npm dep missing from stages");

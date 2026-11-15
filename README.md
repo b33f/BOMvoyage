@@ -127,6 +127,7 @@ comparison is chronological.
 
 ```text
 bomvoyage                                  # scan + serve (the demo path)
+bomvoyage --repo neo4j/neo4j-java-driver   # clone a GitHub repo, cache it, explore that
 bomvoyage --detailed                       # the same, with deps.dev data on the graph
 bomvoyage scan   [PATH] [--db bomvoyage.rl] [--force] [--max-commits N]
 bomvoyage serve  [--db bomvoyage.rl] [--port 8334] [--open]
@@ -201,9 +202,13 @@ snapshot the page replays into the **WASM build of RelateDB**
 the whole explorer, including time travel, red-triangle vulnerabilities and
 the Cypher console, runs in the browser with no server and no database
 file. URLs are relative, so it works under a subpath of an existing site.
-Note: the published artifact exposes the repository's dependency history,
-including committer names and emails. The WASM engine is Chromium-tested
-(upstream); other browsers untested.
+The toolbar gains an **on-demand box** (github org/repo): entering a repo
+scans its CURRENT dependencies in the browser (GitHub public API) — no time
+travel or usage sites for on-demand repos (a browser can't run git); the
+pre-built snapshot is the full-fidelity view. Note: the published artifact
+exposes the repository's dependency history, including committer names and
+emails. The WASM engine is Chromium-tested (upstream); other browsers
+untested.
 
 ### Self-update
 

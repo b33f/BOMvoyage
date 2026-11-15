@@ -101,6 +101,37 @@ findings:
   attest. Downloads are size-capped, nothing from the download is ever
   executed, and the binary is installed with a rename dance that rolls back
   on failure.
+- **`--repo org/repo` cloning is allowlisted and validated**: the spec must
+  be exactly `org/repo` of safe characters (letters, digits, `.`, `-`, `_`;
+  no `..`, no whitespace, no shells metacharacters) — it becomes the only
+  URL built (`https://github.com/<spec>.git`) and the only cache directory
+  name. Cloning goes through the `git` subprocess with arguments passed as
+  `argv` (never through a shell), HTTPS-only, to `github.com` only. Cached
+  clones refresh with `git fetch` + a hard reset to the remote's default
+  branch.
+- **Generated static sites (`bomvoyage site`) make three kinds of network
+  call, each bounded**:
+  - **The visitor's browser** fetches the site's own static files, and —
+    only if the visitor uses the on-demand GitHub box — the **public
+    GitHub API and raw content hosts** (`api.github.com`,
+    `raw.githubusercontent.com`) for the org/repo they typed (spec
+    validated client-side; requests HTTPS-only to GitHub hosts; manifest
+    paths percent-encoded per segment). No credentials, tokens, or visitor
+    data are sent; GitHub sees the visitor's IP and the requested repo,
+    like any GitHub page view.
+  - **Detailed data is baked in at export time** (the site owner's
+    `--detailed` run sends dependency names/versions to deps.dev/OSV once,
+    per the detailed-mode note above) — the site's visitors never call
+    deps.dev; the data is static in the snapshot.
+  - **The graph engine** (`@relate/relate-wasm`) is vendored into the site
+    pinned and SHA-256-verified at export; `--wasm-cdn` opts into a
+    pinned CDN instead, which is the deployer's own supply-chain decision.
+- **The in-browser Cypher console is read-only by the same enforcement** as
+  the server (mutation-prefix refusal), and all snapshot replay and
+  on-demand data flows are **parameterized** (rows as JSON parameters to
+  fixed MERGE statements) — hostile characters in dependency names, emails
+  or manifest paths can never become Cypher, HTML or JavaScript. UI text is
+  HTML-escaped before rendering.
 - **CI is supply-chain hardened**: every GitHub Action is pinned to a **full
   commit SHA** (never a movable tag or branch), workflows run least-privilege
   (`contents: read` everywhere except the release job's `contents: write`),

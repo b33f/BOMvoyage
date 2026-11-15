@@ -212,6 +212,17 @@ window.BOMVOYAGE_ONDEMAND = (function () {
     return res.json();
   }
 
+  /// Encode a repo-relative path for a raw.githubusercontent URL: each
+  /// segment percent-encoded (a crafted filename with `?`, `#` or `%` must
+  /// not be able to redirect the request off the file it names), `/`
+  /// preserved as the separator.
+  function encodePath(p) {
+    if (p.split("/").some((s) => s === ".." || s === ".")) {
+      throw new Error(`refusing suspicious manifest path: ${p}`);
+    }
+    return p.split("/").map(encodeURIComponent).join("/");
+  }
+
   async function scanRepo(spec) {
     if (!validSpec(spec)) throw new Error("enter a github org/repo like neo4j/neo4j-java-driver");
     const head = await gh(`https://api.github.com/repos/${spec}/commits/HEAD`);
@@ -232,7 +243,7 @@ window.BOMVOYAGE_ONDEMAND = (function () {
       const chunk = selected.slice(i, i + FETCH_CONCURRENCY);
       const contents = await Promise.all(
         chunk.map((p) =>
-          fetch(`https://raw.githubusercontent.com/${spec}/HEAD/${p}`)
+          fetch(`https://raw.githubusercontent.com/${spec}/HEAD/${encodePath(p)}`)
             .then((r) => (r.ok ? r.text() : ""))
         )
       );
