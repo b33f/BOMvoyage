@@ -15,7 +15,15 @@ function makeEl(id) {
   const el = {
     id,
     textContent: "",
-    innerHTML: "",
+    _html: "",
+    get innerHTML() {
+      return this._html;
+    },
+    set innerHTML(v) {
+      // mimic the real DOM: setting "" (the clear pattern) drops children
+      this._html = String(v);
+      if (!this._html) this.children.length = 0;
+    },
     hidden: false,
     value: "0",
     max: "0",
@@ -504,6 +512,41 @@ const eg = (s, t, k = "lockfile") => ({ data: { source: s, target: t, source_kin
     throw new Error(`overlay must show phase + progress: ${progressText}`);
   sandbox.window.updateScanOverlay(null);
   if (!el("scan-overlay").hidden) throw new Error("overlay must hide when the walk completes");
+}
+
+// --- suggestion resilience: retry after failure, cache across limits -----
+{
+  // seed a different org first (currentOrg moves off b33f)
+  sandbox.fetch = async () => ({ ok: true, status: 200, json: async () => [{ name: "seed-repo" }] });
+  await sandbox.window.BOMVOYAGE_ONDEMAND.noteSpec("seed/one");
+
+  // b33f: first listing fails (rate limit), the NEXT call retries and fills
+  let b33fFails = 1;
+  sandbox.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("/orgs/freshorg/repos")) {
+      if (b33fFails > 0) { b33fFails--; return { ok: false, status: 403, json: async () => ({}) }; }
+      return { ok: true, status: 200, json: async () => [{ name: "BOMvoyage" }] };
+    }
+    return { ok: true, status: 200, json: async () => [{ name: "seed-repo" }] };
+  };
+  el("repo-suggestions").innerHTML = "";
+  await sandbox.window.BOMVOYAGE_ONDEMAND.noteSpec("freshorg/x");
+  if (el("repo-suggestions").children.length !== 0)
+    throw new Error("a failed listing must not fill anything");
+  await sandbox.window.BOMVOYAGE_ONDEMAND.noteSpec("freshorg/y");
+  let opts = [...el("repo-suggestions").children].map((o) => o.value);
+  if (opts.length !== 1 || opts[0] !== "freshorg/BOMvoyage")
+    throw new Error(`a failed listing must retry on the next call: ${JSON.stringify(opts)}`);
+
+  // leaving and REVISITING b33f with a now-failing network: the cached
+  // listing must render (a rate-limited refresh never wipes the box)
+  await sandbox.window.BOMVOYAGE_ONDEMAND.noteSpec("seed/two");
+  sandbox.fetch = async () => { throw new Error("rate limited"); };
+  await sandbox.window.BOMVOYAGE_ONDEMAND.noteSpec("freshorg/z");
+  opts = [...el("repo-suggestions").children].map((o) => o.value);
+  if (opts.length !== 1 || opts[0] !== "freshorg/BOMvoyage")
+    throw new Error(`a rate-limited revisit must serve the cached listing: ${JSON.stringify(opts)}`);
 }
 
 console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes; version chip renders; diff + seeded-layout verified");

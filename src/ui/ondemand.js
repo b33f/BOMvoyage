@@ -292,12 +292,11 @@ window.BOMVOYAGE_ONDEMAND = (function () {
 
   // ------------------------------------------------------------- wiring
 
-  let currentOrg = null;
+  let currentOrg = null;          // org whose suggestions were SUCCESSFULLY loaded
+  let lastSpec = null;            // the spec the box should show
+  const suggestionCache = new Map(); // org -> last successful listing (a
+                                     // rate-limited retry must not wipe it)
 
-  /// Prepopulate the box: prefill the current spec + fetch the org's 10
-  /// most popular repos (stars) as dropdown suggestions. Free typing is
-  /// never restricted — the datalist only suggests. Called with the spec
-  /// of whichever repo is currently loaded.
   /// The account's most-starred repos. `/orgs/{o}/repos` only answers for
   /// real organizations — user accounts 404 there, so fall back to
   /// `/users/{a}/repos` (which answers for both).
@@ -312,27 +311,41 @@ window.BOMVOYAGE_ONDEMAND = (function () {
     return Array.isArray(repos) ? repos : null;
   }
 
+  function renderSuggestions(org, repos) {
+    const dl = document.getElementById("repo-suggestions");
+    if (!dl) return;
+    dl.innerHTML = "";
+    for (const r of repos) {
+      const opt = document.createElement("option");
+      opt.value = `${org}/${r.name}`;
+      if (r.description) opt.label = `${r.name} — ${String(r.description).slice(0, 60)}`;
+      dl.appendChild(opt);
+    }
+  }
+
   async function noteSpec(spec) {
     if (!spec) return;
+    lastSpec = spec;
     const input = document.getElementById("repo-input");
     if (input && !input.value) input.value = spec;
     const org = spec.split("/")[0];
     if (org === currentOrg) return;
-    currentOrg = org;
+    // Show the cached listing immediately, then refresh from the network —
+    // a failed/rate-limited fetch must not wipe what was there, and must
+    // not mark the org loaded (the next call retries).
+    const cached = suggestionCache.get(org);
+    if (cached) renderSuggestions(org, cached);
     try {
       const repos = await orgTopRepos(org);
-      const dl = document.getElementById("repo-suggestions");
-      if (repos && dl) {
-        dl.innerHTML = "";
-        for (const r of repos) {
-          const opt = document.createElement("option");
-          opt.value = `${org}/${r.name}`;
-          if (r.description) opt.label = `${r.name} — ${String(r.description).slice(0, 60)}`;
-          dl.appendChild(opt);
-        }
+      if (repos) {
+        currentOrg = org; // only after success: failures retry on the next call
+        suggestionCache.set(org, repos);
+        renderSuggestions(org, repos);
+      } else {
+        console.warn(`repo suggestions: no repository listing for ${org}`);
       }
-    } catch (_) {
-      // suggestions are a nicety; a failed org listing never blocks scanning
+    } catch (e) {
+      console.warn(`repo suggestions failed for ${org}:`, e);
     }
   }
 
@@ -380,6 +393,14 @@ window.BOMVOYAGE_ONDEMAND = (function () {
     go.addEventListener("click", run);
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") run();
+    });
+    // Self-heal: focusing an empty-dropdown box retries the listing (a
+    // rate-limited fetch at page load recovers the moment the user looks).
+    input.addEventListener("focus", () => {
+      if (lastSpec && !document.getElementById("repo-suggestions")?.children.length) {
+        currentOrg = null;
+        noteSpec(lastSpec);
+      }
     });
   }
 
