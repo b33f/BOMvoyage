@@ -64,6 +64,7 @@ async function boot(detailedPackages) {
     if (url.includes("/api/meta"))
       return {
         name: "smoke",
+        version: "1.2.3",
         total_packages: 0,
         detailed_packages: detailedPackages,
         ecosystems: [],
@@ -116,7 +117,7 @@ const vulnCount = (holder) =>
   ).length;
 
 // --- world 1: a detailed graph -----------------------------------------
-const { sandbox, holder } = await boot(5);
+const { sandbox, holder, el } = await boot(5);
 
 if (vulnCount(holder) !== 1)
   throw new Error(
@@ -157,4 +158,15 @@ const plainGreen = plain.sandbox.nodeColor(fakeNode({ ecosystem: "python" }));
 if (plainGreen !== "#3fb950")
   throw new Error(`package nodes are green in every mode, got ${plainGreen}`);
 
-console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes");
+// The version chip renders in both worlds, subtly, from /api/meta.
+const checkVersion = (el, label) => {
+  const chip = el("version");
+  if (chip.hidden || chip.textContent !== "v1.2.3")
+    throw new Error(
+      `${label}: version chip must show v1.2.3, got hidden=${chip.hidden} "${chip.textContent}"`
+    );
+};
+checkVersion(el, "detailed");
+checkVersion(plain.el, "plain");
+
+console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes; version chip renders");

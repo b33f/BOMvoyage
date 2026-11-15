@@ -152,6 +152,7 @@ impl Api {
 
         Ok(serde_json::json!({
             "name": self.repo_name,
+            "version": env!("CARGO_PKG_VERSION"),
             "head_sha": head_sha,
             "last_scanned_at": scanned_at,
             "scan_quality": scan_quality,

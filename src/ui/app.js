@@ -746,6 +746,12 @@ async function init() {
     $("project").hidden = false;
     document.title = `${project} · BOMvoyage`;
   }
+  // Subtle compiled-in version chip beside the brand.
+  if (meta.version) {
+    const v = $("version");
+    v.textContent = `v${meta.version}`;
+    v.hidden = false;
+  }
   $("meta").innerHTML =
     `<span><strong>${meta.total_packages}</strong> package versions</span><span class="sep">·</span>` +
     `<span>scanned ${fmtDate(meta.last_scanned_at)}</span><span class="sep">·</span>` +
