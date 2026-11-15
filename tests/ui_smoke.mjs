@@ -237,4 +237,20 @@ const eg = (s, t, k = "lockfile") => ({ data: { source: s, target: t, source_kin
     throw new Error("toggling 4× off must restore the 900ms base");
 }
 
+// version-bump detection: the purl base (everything before the version)
+{
+  const cases = [
+    ["pkg:cargo/serde@1.0.1", "pkg:cargo/serde"],
+    ["pkg:npm/@types/node@20.1.0", "pkg:npm/@types/node"], // last @ wins, not the scope's
+    ["pkg:maven/junit/junit@4.12", "pkg:maven/junit/junit"],
+    ["pkg:cargo/serde@", "pkg:cargo/serde"], // version-less manifest dep
+    ["dev:Zhen", null], // hubs have no version part
+    ["n42", null], // query node ids
+  ];
+  for (const [id, want] of cases) {
+    const got = sandbox.baseOf(id);
+    if (got !== want) throw new Error(`baseOf(${id}) = ${got}, want ${want}`);
+  }
+}
+
 console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes; version chip renders; diff + seeded-layout verified");

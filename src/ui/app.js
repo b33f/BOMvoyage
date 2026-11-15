@@ -19,7 +19,6 @@ const PACKAGE_GREEN = "#3fb950";
 /// a pink outline and fades to the standard green as it settles in.
 const ARRIVAL_PURPLE = "#a371f7";
 const ARRIVAL_PINK = "#ff7bac";
-
 /// Base duration of graph motion (layout glides, fan animation). The 4×
 /// control divides it by four — and divides the sweep pacing by four —
 /// while it's active.
@@ -480,15 +479,26 @@ function spawnPosition(id, elements) {
   return { x: 0, y: 0 };
 }
 
+/// The version-less base of a purl (`pkg:cargo/serde@1.0.1` →
+/// `pkg:cargo/serde`) — how a version bump is recognized as the same
+/// dependency in a new version. Null for ids without a version part
+/// (hubs, query nodes). The `@` before the version is the LAST one —
+/// npm scoped names (`pkg:npm/@types/node@20.1.0`) keep working.
+function baseOf(id) {
+  const at = id.lastIndexOf("@");
+  return at > 4 ? id.slice(0, at) : null;
+}
+
 /// A brand-new dependency arrives purple with a pink outline and fades to
-/// the standard green (border fading out) over the animation duration —
-/// it visibly "pops in" without breaking the canvas's color grammar.
-/// The inline styles are cleared afterwards so the stylesheet regains
-/// control (e.g. a later `vulns > 0` must be able to turn the node red).
-/// Hubs (dev:/area:) are groupings, not dependencies — they arrive plain.
+/// the standard green (border fading out) — it visibly "pops in" without
+/// breaking the canvas's color grammar. The fade is deliberately slower
+/// than the motion: twice the base animation time. The inline styles are
+/// cleared afterwards so the stylesheet regains control (e.g. a later
+/// `vulns > 0` must be able to turn the node red). Hubs (dev:/area:) are
+/// groupings, not dependencies — they arrive plain.
 function arriveWithFlourish(ele, data) {
   if (data.type !== "package") return;
-  const animMs = ANIM_MS / playbackRate;
+  const fadeMs = (ANIM_MS * 2) / playbackRate;
   ele.style({
     "background-color": ARRIVAL_PURPLE,
     "border-color": ARRIVAL_PINK,
@@ -502,12 +512,12 @@ function arriveWithFlourish(ele, data) {
         "border-width": 0,
       },
     },
-    { duration: animMs, easing: "ease-in-out" }
+    { duration: fadeMs, easing: "ease-in-out" }
   );
   // Wait for the fade to finish, then hand styling back to the stylesheet.
   setTimeout(() => {
     if (ele.inside()) ele.removeStyle();
-  }, animMs + 100);
+  }, fadeMs + 100);
 }
 
 function rebuildGraph(elements) {
@@ -532,6 +542,9 @@ function rebuildGraph(elements) {
   const isQuery = !!queryElements;
   const full = needsFullLayout || isQuery || lastRenderWasQuery;
   let changed = true;
+  // Version-bump nodes pinned on the replaced version's spot while the
+  // layout arranges the neighbourhood (released on layoutstop/timeout).
+  const heldReplacements = [];
 
   // Dense canvases only label nodes once you zoom in — but the dependencies
   // view is hand-placed and spread out, so it always labels.
@@ -555,14 +568,33 @@ function rebuildGraph(elements) {
     const nextData = new Map(elements.nodes.map((n) => [n.data.id, n.data]));
     cy.batch(() => {
       if (changed) {
+        // A version bump is a new purl (a Package node IS name+version):
+        // when the diff removes pkg:x/y@OLD and adds pkg:x/y@NEW, the new
+        // version takes over the old one's exact spot in the graph.
+        const replacedAt = new Map();
+        for (const id of diff.removedNodeIds) {
+          const base = baseOf(id);
+          if (base === null) continue;
+          const old = cy.getElementById(id);
+          if (old.nonempty()) replacedAt.set(base, old.position());
+        }
         const rmKeys = new Set(diff.removedEdgeKeys);
         cy.edges()
           .filter((e) => rmKeys.has(edgeKeyOf(e)))
           .remove();
         for (const id of diff.removedNodeIds) cy.getElementById(id).remove();
         for (const n of diff.addedNodes) {
-          const ele = cy.add({ data: Object.assign({}, n.data), position: spawnPosition(n.data.id, elements) });
+          const base = baseOf(n.data.id);
+          const replacement = base !== null ? replacedAt.get(base) : undefined;
+          const pos = replacement || spawnPosition(n.data.id, elements);
+          const ele = cy.add({ data: Object.assign({}, n.data), position: pos });
           arriveWithFlourish(ele, n.data);
+          if (replacement) {
+            // Pin the new version on the old one's spot while the layout
+            // arranges the neighbourhood around it, then release it.
+            ele.lock();
+            heldReplacements.push(ele);
+          }
         }
         for (const e of diff.addedEdges) {
           cy.add({ data: Object.assign({}, e.data) });
@@ -586,8 +618,16 @@ function rebuildGraph(elements) {
       runningLayout = cy.layout(layoutOptions(elements.nodes.length, !full)).run();
       runningLayout.on("layoutstop", () => {
         runningLayout = null;
+        for (const e of heldReplacements) if (e.inside()) e.unlock();
+        heldReplacements.length = 0;
       });
     }
+    // Failsafe: never leave a node locked if the layoutstop event is slow
+    // or the areas layout path skipped it.
+    setTimeout(() => {
+      for (const e of heldReplacements) if (e.inside()) e.unlock();
+      heldReplacements.length = 0;
+    }, (ANIM_MS * 2) / playbackRate + 500);
     fitReasonably();
   }
   renderLegend();
