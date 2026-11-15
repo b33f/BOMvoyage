@@ -19,6 +19,7 @@ bomvoyage serve --db FILE [--port 8334] [--open]
 bomvoyage query --db FILE "CYPHER" # read-only openCypher against the graph, JSON out
 bomvoyage export --db FILE --format spdx|cyclonedx|json|csv [--as-of DATE|SHA] [-o FILE]
 bomvoyage detailed --db FILE       # add deps.dev data to an existing graph in place (no rescan)
+bomvoyage site [DIR] --out dist    # export a static in-browser explorer (WASM) for Cloudflare Pages etc.
 bomvoyage update check             # is there a newer release?
 bomvoyage update apply             # upgrade the binary in place (checksum + provenance verified)
 ```

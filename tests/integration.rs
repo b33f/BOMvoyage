@@ -588,6 +588,128 @@ fn detailed_mode_properties_survive_rescan() {
     }
 }
 
+/// `bomvoyage site`'s core promise: a snapshot dumped from a scanned graph
+/// replays into a SECOND database and builds the IDENTICAL graph — the same
+/// proof the browser's WASM replay needs, made natively. Asserted over the
+/// read queries the generated site's UI runs, at HEAD and at a past date.
+#[test]
+fn site_snapshot_roundtrip_replays_identical_graph() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("demo");
+    std::fs::create_dir(&repo).expect("create repo dir");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    let lock = |pkgs: &[(&str, &str)]| {
+        let mut s = String::new();
+        for (n, v) in pkgs {
+            s.push_str(&format!(
+                "[[package]]\nname = \"{n}\"\nversion = \"{v}\"\n\n"
+            ));
+        }
+        s
+    };
+    commit_full(
+        &repo,
+        "Ada",
+        "ada@example.com",
+        "2024-01-01T12:00:00+00:00",
+        "add serde",
+        &[
+            ("Cargo.toml", &cargo_toml(&[("serde", "1.0.100")])),
+            ("Cargo.lock", &lock(&[("serde", "1.0.100")])),
+        ],
+    );
+    commit_full(
+        &repo,
+        "Ada",
+        "ada@example.com",
+        "2024-02-01T12:00:00+00:00",
+        "bump serde",
+        &[
+            ("Cargo.toml", &cargo_toml(&[("serde", "1.0.200")])),
+            ("Cargo.lock", &lock(&[("serde", "1.0.200")])),
+        ],
+    );
+
+    // source graph
+    let source_db = tmp.path().join("source.rl");
+    let out = bomvoyage::scan::run(&repo, bomvoyage::scan::ScanCaps::default()).expect("scan");
+    let g = bomvoyage::graph::SbomGraph::open_writable(&source_db).expect("open");
+    g.write_scan(&out).expect("write");
+
+    // dump
+    let head = g.stored_head().expect("head").unwrap_or_default();
+    let snapshot = {
+        let mut conn = g.db.connect().expect("connect");
+        bomvoyage::site::dump::dump(&mut conn, "demo", &head, true).expect("dump")
+    };
+    assert!(snapshot.stages.contains_key("packages"));
+    assert!(snapshot.stages.contains_key("declares"));
+    drop(g);
+
+    // replay into a second, empty database
+    let replay_db = tmp.path().join("replayed.rl");
+    let g = bomvoyage::graph::SbomGraph::open_writable(&replay_db).expect("open");
+    {
+        let mut conn = g.db.connect().expect("connect");
+        bomvoyage::site::dump::replay_snapshot(&mut conn, &snapshot).expect("replay");
+    }
+    drop(g);
+
+    // both graphs answer the site's read queries identically
+    let rows_of = |db: &Path, query: &str, as_of: Option<&str>| -> Vec<String> {
+        let graph = bomvoyage::graph::SbomGraph::open_read_only(db).expect("open");
+        let mut conn = graph.db.connect().expect("connect");
+        let result = {
+            // HEAD (None) resolves to max commit date, exactly as the
+            // server's resolve_as_of does
+            let as_of = match as_of {
+                Some(a) => a.to_string(),
+                None => {
+                    let r = conn
+                        .query("MATCH (c:Commit) RETURN max(c.date) AS d")
+                        .expect("head");
+                    r.rows[0][0].as_string().expect("head date").to_string()
+                }
+            };
+            let mut params = std::collections::BTreeMap::new();
+            params.insert("as_of".to_string(), Value::String(as_of.into()));
+            conn.query_with_params(query, params).expect("query")
+        };
+        let mut rows: Vec<String> = result
+            .rows
+            .iter()
+            .map(|r| {
+                r.iter()
+                    .map(|v| {
+                        v.as_string()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| v.to_string())
+                    })
+                    .collect::<Vec<_>>()
+                    .join("|")
+            })
+            .collect();
+        rows.sort();
+        rows
+    };
+    use bomvoyage::graph::queries as q;
+    for (query, as_of) in [
+        (q::LIVE_PACKAGES, Some("2024-01-15T00:00:00Z")),
+        (q::LIVE_PACKAGES, Some("2024-03-01T00:00:00Z")),
+        (q::LIVE_PACKAGES, None),
+        (q::LIVE_DEPENDS_ON, Some("2024-03-01T00:00:00Z")),
+        (q::COMMITS, None),
+        (q::META, None),
+    ] {
+        let a = rows_of(&source_db, query, as_of);
+        let b = rows_of(&replay_db, query, as_of);
+        assert_eq!(
+            a, b,
+            "replayed graph must answer {query} (as_of {as_of:?}) identically"
+        );
+    }
+}
+
 /// `scan --detailed` on a repo whose HEAD was already scanned must NOT
 /// silently no-op: the "history is current" short-circuit used to return
 /// before the detailed pass ran, so a graph scanned without the flag could

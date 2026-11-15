@@ -21,6 +21,10 @@ pub const APP_JS: &str = include_str!("../ui/app.js");
 pub const SEARCH_JS: &str = include_str!("../ui/search.js");
 pub const STYLE_CSS: &str = include_str!("../ui/style.css");
 pub const CYTOSCAPE_JS: &[u8] = include_bytes!("../ui/vendor/cytoscape.min.js");
+/// The in-browser backend for generated static sites (`bomvoyage site`);
+/// unused by this server's routes but embedded so the site exporter and
+/// the parse/wiring tests share one source of truth.
+pub const WASM_BACKEND_JS: &str = include_str!("../ui/wasm-backend.js");
 
 /// Set by the first Ctrl+C; the serve loop polls it between accepts.
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -178,15 +182,22 @@ mod tests {
     }
 
     /// The static UI must stay wired to the server: every script/style the
-    /// page loads must be among the embedded, routed files.
+    /// page loads must be among the embedded, routed files (relative asset
+    /// URLs — they resolve against the page URL, so the same index serves
+    /// at server root AND under a subpath of a static site).
     #[test]
     fn index_references_only_embedded_assets() {
-        for src in ["/app.js", "/search.js", "/style.css", "/cytoscape.min.js"] {
+        for src in ["app.js", "search.js", "style.css", "cytoscape.min.js"] {
             assert!(
-                INDEX_HTML.contains(src.trim_start_matches('/')),
+                INDEX_HTML.contains(&format!("src=\"{src}\""))
+                    || INDEX_HTML.contains(&format!("href=\"{src}\"")),
                 "index.html references {src} but the check didn't find it"
             );
         }
+        assert!(
+            !INDEX_HTML.contains("src=\"/") && !INDEX_HTML.contains("href=\"/"),
+            "index.html must use relative asset URLs (subpath hosting)"
+        );
         // The motion legend's static swatches must carry the same colors as
         // the arrival-flourish constants in app.js (yellow = version update,
         // purple = newly added dependency).

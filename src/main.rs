@@ -90,6 +90,27 @@ fn run(cli: &Cli) -> ToolResult<()> {
             // meaningful on its own here (the global --detailed is ignored).
             cmd_detailed(db, vuln_details, *refresh)
         }
+        Some(Command::Site {
+            path,
+            db,
+            out,
+            force,
+            max_commits,
+            wasm_cdn,
+        }) => {
+            spawn_daily_update_check(cli.no_update_check);
+            warn_vuln_details_without_detailed(detailed, vuln_details);
+            cmd_site(
+                path,
+                db,
+                out,
+                *force,
+                *max_commits,
+                detailed,
+                vuln_details,
+                *wasm_cdn,
+            )
+        }
         Some(Command::Export {
             db,
             format,
@@ -353,6 +374,31 @@ fn warn_vuln_details_without_detailed(detailed: bool, vuln_details: bool) {
     if vuln_details && !detailed {
         eprintln!("warning: --vuln-details has no effect without --detailed");
     }
+}
+
+/// `bomvoyage site`: scan (or reuse the db) + optional detailed pass +
+/// dump + emit the static site directory.
+#[allow(clippy::too_many_arguments)]
+fn cmd_site(
+    path: &Path,
+    db: &Path,
+    out: &Path,
+    force: bool,
+    max_commits: u64,
+    detailed: bool,
+    vuln_details: bool,
+    wasm_cdn: bool,
+) -> ToolResult<()> {
+    bomvoyage::site::site_command(
+        path,
+        db,
+        out,
+        force,
+        max_commits,
+        detailed,
+        vuln_details,
+        wasm_cdn,
+    )
 }
 
 /// `bomvoyage detailed`: add detailed data to an existing graph in place,

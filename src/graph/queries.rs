@@ -85,6 +85,23 @@ RETURN pr.name AS name, pr.head_sha AS head_sha, pr.last_scanned_at AS scanned_a
        pr.scan_quality AS scan_quality, pr.history_head_sha AS history_head
 "#;
 
+/// Meta supplement: packages per ecosystem (shared by the server API and
+/// the static-site backend).
+pub const META_COUNTS: &str = r#"
+MATCH (p:Package) RETURN p.ecosystem AS eco, count(DISTINCT p.name) AS n ORDER BY n DESC
+"#;
+
+/// Meta supplement: total package count.
+pub const META_TOTAL: &str = r#"
+MATCH (p:Package) RETURN count(p) AS n
+"#;
+
+/// Meta supplement: packages carrying detailed-mode (deps.dev) data — the
+/// UI offers the vulnerable-deps console preset when this is > 0.
+pub const META_DETAILED: &str = r#"
+MATCH (p:Package) WHERE p.depsdev_status IS NOT NULL RETURN count(p) AS n
+"#;
+
 /// Resolve an as-of token that looks like a sha prefix to its commit date.
 pub const SHA_DATE: &str = r#"
 MATCH (c:Commit)

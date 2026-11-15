@@ -133,6 +133,7 @@ bomvoyage serve  [--db bomvoyage.rl] [--port 8334] [--open]
 bomvoyage export [--db bomvoyage.rl] [--format spdx|cyclonedx|json|csv] [--as-of DATE|SHA] [-o FILE]
 bomvoyage query  [--db bomvoyage.rl] <CYPHER>
 bomvoyage detailed [--db bomvoyage.rl] [--vuln-details] [--refresh]   # add deps.dev data to an existing graph, no rescan
+bomvoyage site   [PATH] [--out dist]        # export a static in-browser explorer (WASM) for any static host
 bomvoyage update check                      # is there a newer release?
 bomvoyage update apply                      # upgrade the binary in place
 bomvoyage skill install                     # install the agent skill for every coding agent on this machine
@@ -185,6 +186,24 @@ put that version there.
   rescan without the flag.
 - Requests to deps.dev can carry your own API key for a higher quota via the
   `BOMVOYAGE_DEPSDEV_KEY` environment variable.
+
+### Static sites (WASM) — host the explorer on your own site
+
+```console
+$ bomvoyage site /path/to/repo --detailed --vuln-details --out dist
+$ npx wrangler pages deploy dist        # Cloudflare Pages; any static host works
+```
+
+`bomvoyage site` scans the repository (fully, synchronously), runs detailed
+mode, and writes a self-contained static site: the graph ships as a JSON
+snapshot the page replays into the **WASM build of RelateDB**
+(`@relate/relate-wasm`, vendored pinned-and-checksummed into the output) —
+the whole explorer, including time travel, red-triangle vulnerabilities and
+the Cypher console, runs in the browser with no server and no database
+file. URLs are relative, so it works under a subpath of an existing site.
+Note: the published artifact exposes the repository's dependency history,
+including committer names and emails. The WASM engine is Chromium-tested
+(upstream); other browsers untested.
 
 ### Self-update
 

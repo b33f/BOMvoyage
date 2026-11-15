@@ -65,6 +65,9 @@ const DIRECT_ONLY_THRESHOLD = 20;
 const $ = (id) => document.getElementById(id);
 
 async function fetchJson(url, opts) {
+  // A generated static site (bomvoyage site) answers everything from an
+  // in-browser RelateDb (WASM) — same response shapes, no server.
+  if (window.BOMVOYAGE_STATIC) return window.BOMVOYAGE_STATIC.fetchJson(url, opts);
   const res = await fetch(url, opts);
   const body = await res.json();
   if (body.error) throw new Error(body.error);
@@ -1010,7 +1013,7 @@ async function refresh() {
   setAsOfLabel(asOf);
   const q = asOf ? `?as_of=${encodeURIComponent(asOf)}` : "";
   try {
-    const payload = await fetchJson(`/api/graph${q}`);
+    const payload = await fetchJson(`api/graph${q}`);
     if (seq !== renderSeq) return; // a newer refresh is already in charge
     lastElements = payload.elements;
     if (showTransitive === null) {
@@ -1117,8 +1120,8 @@ async function showPackage(purl, asOfOverride) {
   const suffix = asOf ? `&as_of=${encodeURIComponent(asOf)}` : "";
   try {
     const [history, usage] = await Promise.all([
-      fetchJson(`/api/history?name=${encodeURIComponent(purl)}${suffix}`),
-      fetchJson(`/api/usage?purl=${encodeURIComponent(purl)}`),
+      fetchJson(`api/history?name=${encodeURIComponent(purl)}${suffix}`),
+      fetchJson(`api/usage?purl=${encodeURIComponent(purl)}`),
     ]);
     if (selectedPackage !== purl) return; // a newer click won
     const rows = history.rows || [];
@@ -1255,7 +1258,7 @@ function escapeHtml(s) {
 // ---------------------------------------------------------------- init
 
 async function init() {
-  const meta = await fetchJson("/api/meta");
+  const meta = await fetchJson("api/meta");
   detailedPackages = meta.detailed_packages || 0;
   const badges = (meta.ecosystems || [])
     .map((e) => `<span class="badge"><span class="swatch" style="background:${ECOSYSTEM_COLORS[e.ecosystem] || ECOSYSTEM_COLORS.generic}"></span>${escapeHtml(e.ecosystem)} · ${e.names}</span>`)
@@ -1277,7 +1280,7 @@ async function init() {
     `<span>scanned ${fmtDate(meta.last_scanned_at)}</span><span class="sep">·</span>` +
     `<span>resolution <strong>${escapeHtml(meta.scan_quality)}</strong></span>${badges}`;
 
-  const commitPayload = await fetchJson("/api/commits");
+  const commitPayload = await fetchJson("api/commits");
   setCommits(commitPayload.rows || []);
   const slider = $("slider");
   slider.addEventListener("input", () => {
@@ -1323,7 +1326,7 @@ function pollUpdateAvailable() {
   const tick = async () => {
     let info;
     try {
-      info = await fetchJson("/api/update");
+      info = await fetchJson("api/update");
     } catch {
       return; // server without update support or gone — stay silent
     }
@@ -1390,7 +1393,7 @@ function pollHistoryStatus(current) {
   $("meta").appendChild(badge);
   const timer = setInterval(async () => {
     try {
-      const meta = await fetchJson("/api/meta");
+      const meta = await fetchJson("api/meta");
       if (meta.detailed_packages) {
         detailedPackages = meta.detailed_packages;
         addVulnerablePreset();
@@ -1398,7 +1401,7 @@ function pollHistoryStatus(current) {
       if (meta.history_current) {
         clearInterval(timer);
         badge.remove();
-        const commitPayload = await fetchJson("/api/commits");
+        const commitPayload = await fetchJson("api/commits");
         setCommits(commitPayload.rows || []);
         refresh();
       }
@@ -1776,7 +1779,7 @@ async function runCypher(opts = {}) {
   try {
     const body = { cypher };
     if (cypher.includes("$as_of")) body.params = { as_of: asOfValue() || STALE_AS_OF };
-    const res = await fetchJson("/api/query", {
+    const res = await fetchJson("api/query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1851,5 +1854,6 @@ function renderResultTable(columns, rows) {
 }
 
 init().catch((e) => {
+  console.error("BOMvoyage init failed:", e);
   $("meta").textContent = `failed to load: ${e.message}`;
 });

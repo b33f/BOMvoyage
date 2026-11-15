@@ -148,6 +148,31 @@ pub enum Command {
         #[arg(long)]
         refresh: bool,
     },
+    /// Export a fully static, self-contained explorer site (deployable to
+    /// Cloudflare Pages or any static host; the graph is explored in-browser
+    /// via the WASM build of RelateDB)
+    Site {
+        /// Repository path (a scan runs if the database is missing or stale)
+        #[arg(value_name = "DIR", default_value = ".")]
+        path: std::path::PathBuf,
+        /// Graph database file (created/updated if a scan is needed)
+        #[arg(long, short, value_name = "FILE", default_value = "bomvoyage.rl")]
+        db: std::path::PathBuf,
+        /// Output directory for the static site
+        #[arg(long, short, value_name = "DIR", default_value = "dist")]
+        out: std::path::PathBuf,
+        /// Re-scan even if the repository HEAD is unchanged, and overwrite
+        /// a non-empty output directory
+        #[arg(long)]
+        force: bool,
+        /// Cap on commits walked
+        #[arg(long, value_name = "N", default_value_t = 5000)]
+        max_commits: u64,
+        /// Serve the graph engine from a pinned public CDN instead of
+        /// bundling it into the site (adds a third-party script to YOUR page)
+        #[arg(long)]
+        wasm_cdn: bool,
+    },
     /// Export the SBOM (optionally as of a past commit or date)
     Export {
         /// Graph database file

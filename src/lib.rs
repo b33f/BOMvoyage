@@ -9,5 +9,6 @@ pub mod export;
 pub mod graph;
 pub mod scan;
 pub mod server;
+pub mod site;
 pub mod skill;
 pub mod update;

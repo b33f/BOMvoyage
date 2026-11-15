@@ -72,7 +72,7 @@ async function boot(detailedPackages) {
     return els.get(id);
   };
   const fetchJsonFor = (url) => {
-    if (url.includes("/api/meta"))
+    if (url.includes("api/meta"))
       return {
         name: "smoke",
         version: "1.2.3",
@@ -84,8 +84,8 @@ async function boot(detailedPackages) {
         last_scanned_at: "2026-01-01T00:00:00Z",
         head_sha: "abc",
       };
-    if (url.includes("/api/commits")) return { rows: [] };
-    if (url.includes("/api/graph"))
+    if (url.includes("api/commits")) return { rows: [] };
+    if (url.includes("api/graph"))
       return { as_of: null, elements: { nodes: [], edges: [] } };
     return {};
   };
@@ -277,6 +277,108 @@ const eg = (s, t, k = "lockfile") => ({ data: { source: s, target: t, source_kin
   );
   if (out2.get("a").x !== -300 || out2.get("a").y !== 0)
     throw new Error("locked anchor must not move");
+}
+
+// --- wasm-backend.js: the static-site backend contract -------------------
+{
+  const src2 = readFileSync(new URL("../src/ui/wasm-backend.js", import.meta.url), "utf8");
+  // a fake engine whose execute() returns canned wire envelopes keyed by
+  // distinctive query substrings — no WASM, no network
+  const envelope = (columns, rows) => JSON.stringify({ columns, rows, error: null });
+  const fake = () => ({
+    execute(query) {
+      if (query.includes("max(c.date)")) return envelope(["d"], [["2024-03-01T00:00:00Z"]]);
+      if (query.includes("count(DISTINCT")) return envelope(["eco", "n"], [["java", 5]]);
+      if (query.includes("depsdev_status IS NOT NULL")) return envelope(["n"], [[3]]);
+      if (query.includes("count(p)")) return envelope(["n"], [[7]]);
+      if (query.includes("STARTS WITH $sha")) return envelope(["date"], [["2024-01-01T00:00:00Z"]]);
+      if (query.includes("p.vulns AS vulns"))
+        return envelope(
+          ["purl", "name", "version", "ecosystem", "scope", "manifest", "added_by",
+           "added_date", "requirement", "vulns", "license", "depsdev_url", "homepage",
+           "repository", "advisories"],
+          [[
+            "pkg:maven/junit/junit@4.12", "junit", "4.12", "java", "direct", "pom.xml",
+            "Ada", "2024-01-01", "4.12", 2, "MIT", "https://deps.dev/x", "", "",
+            '[{"id":"GHSA-1","aliases":["CVE-1"]}]',
+          ]]
+        );
+      if (query.includes("DEPENDS_ON"))
+        return envelope(["from", "to", "source"], [["a", "b", "lockfile"]]);
+      if (query.includes("r.symbol AS symbol")) return envelope(["file", "symbol"], [["Main.java", "junit.framework"]]);
+      if (query.includes("added_by_name AS added_by_name")) return envelope(["purl", "added_by_name"], [["p", "Ada"]]);
+      if (query.includes("c.author_name AS author")) return envelope(["sha", "date", "summary", "author"], [["s1", "2024-01-01", "m", "Ada"]]);
+      if (query.includes("MATCH (n)") || query.includes("MATCH (x")) {
+        // raw-console query returning a node cell (wire format) + stub case
+        return envelope(["n"], [[{ _labels: ["Package"], purl: "p1", name: "p1", version: "1" }]]);
+      }
+      return envelope([], []);
+    },
+  });
+
+  // boot the backend with the fake engine + a fake snapshot fetch
+  const sb = sandbox; // reuse world 1 (detailed)
+  // The generated queries.js would provide this; the fake db matches on
+  // the same distinctive substrings the real constants carry.
+  sb.window.BOMVOYAGE_QUERIES = {
+    META: "META", META_COUNTS: "count(DISTINCT", META_TOTAL: "count(p)",
+    META_DETAILED: "depsdev_status IS NOT NULL", LIVE_PACKAGES: "p.vulns AS vulns",
+    LIVE_DEPENDS_ON: "DEPENDS_ON", HISTORY: "added_by_name AS added_by_name",
+    USAGE: "r.symbol AS symbol", COMMITS: "c.author_name AS author",
+    SHA_DATE: "STARTS WITH $sha", MERGE_PACKAGES: "MERGE (p:Package",
+  };
+  sb.window.BOMVOYAGE_RELATE_FACTORY = fake;
+  const origFetch = sb.fetch;
+  sb.fetch = async (url) => ({
+    json: async () => (String(url).includes("snapshot.json")
+      ? { format: 1, name: "demo", tool_version: "0.2.1", stages: { packages: [{ purl: "p1", name: "p1", eco: "java", version: "1", scope: "direct" }] } }
+      : origFetch(url).then((r) => r.json())),
+  });
+  vm.runInContext(src2, sandbox, { filename: "wasm-backend.js" }); // boots immediately
+  await sb.window.BOMVOYAGE_STATIC.ready;
+
+  const meta = await sb.window.BOMVOYAGE_STATIC.fetchJson("api/meta");
+  if (meta.history_current !== true) throw new Error("static meta: history_current must always be true");
+  if (meta.name !== "demo" || meta.detailed_packages !== 3 || meta.total_packages !== 7)
+    throw new Error(`static meta shape wrong: ${JSON.stringify(meta)}`);
+
+  const g = await sb.window.BOMVOYAGE_STATIC.fetchJson("api/graph?as_of=2024-01-15");
+  const node = g.elements.nodes[0].data;
+  if (node.id !== "pkg:maven/junit/junit@4.12" || node.label !== "junit@4.12")
+    throw new Error(`static graph node shape wrong: ${JSON.stringify(node)}`);
+  if (node.vulns !== 2 || !Array.isArray(node.advisories) || node.advisories[0].id !== "GHSA-1")
+    throw new Error(`static graph advisories must be a parsed array: ${JSON.stringify(node.advisories)}`);
+  if (g.as_of !== "2024-01-15T23:59:59Z") throw new Error(`as-of date expansion wrong: ${g.as_of}`);
+
+  const upd = await sb.window.BOMVOYAGE_STATIC.fetchJson("api/update");
+  if (upd.available !== false || upd.checking !== false) throw new Error("static update shim wrong");
+
+  let refusedMessage = null;
+  try {
+    await sb.window.BOMVOYAGE_STATIC.fetchJson("api/query", {
+      method: "POST",
+      body: JSON.stringify({ cypher: "DELETE (n)" }),
+    });
+  } catch (e) {
+    refusedMessage = e.message;
+  }
+  if (!refusedMessage || !refusedMessage.includes("read-only endpoint"))
+    throw new Error(`static query console must refuse writes: ${refusedMessage}`);
+
+  const q = await sb.window.BOMVOYAGE_STATIC.fetchJson("api/query", {
+    method: "POST",
+    body: JSON.stringify({ cypher: "MATCH (x:Package) RETURN x" }),
+  });
+  if (!q.elements || q.elements.nodes.length !== 1 || q.elements.nodes[0].data.kind !== "Package")
+    throw new Error(`static console elements wrong: ${JSON.stringify(q.elements)}`);
+
+  let threw = false;
+  try {
+    await sb.window.BOMVOYAGE_STATIC.fetchJson("api/nope");
+  } catch (e) {
+    threw = true;
+  }
+  if (!threw) throw new Error("unknown endpoints must surface as errors");
 }
 
 console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes; version chip renders; diff + seeded-layout verified");

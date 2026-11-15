@@ -11,7 +11,7 @@ Run everything locally with:
 $ cargo test
 ```
 
-The suite is 72 tests: 69 unit tests in the library plus three end-to-end
+The suite is 76 tests: 72 unit tests in the library plus four end-to-end
 integration tests (`tests/integration.rs`) that build a real git repository
 commit by commit and run the full scan → graph → temporal-query pipeline.
 
@@ -137,6 +137,19 @@ fixture JSON or a temp-directory cache.
 | `collect_ids_dedups_via_caller` | Distinct advisory-id collection across packages; malformed JSON tolerated |
 | `cache_roundtrip_including_negative` | The disk cache writes and reads back, including cached 404 negatives; a missing cache dir is a universal miss and a no-op write |
 | `host_allowlist` | The transport policy: HTTPS to `api.deps.dev`/`api.osv.dev` only — look-alike hosts, plaintext, other schemes, userinfo tricks refused |
+
+## Static-site export (`src/site/`)
+
+| Test | What it tests |
+|---|---|
+| `site_snapshot_roundtrip_replays_identical_graph` | The load-bearing one: a snapshot dumped from a scanned graph replays into a second database and answers `LIVE_PACKAGES`/`LIVE_DEPENDS_ON`/`COMMITS`/`META` **identically** at HEAD and at past dates — the native twin of the browser's WASM replay |
+| `replay_order_matches_merge_constants` | The replay order maps each stage to a distinct MERGE statement |
+| `index_transform_injects_backend_and_stays_relative` | The generated index injects the backend before app.js and keeps relative asset URLs (subpath-safe) |
+| `queries_js_covers_every_constant_the_backend_needs` | The generated `queries.js` carries every read query + MERGE template the backend dispatches (hardcoded key list), and parses as JSON |
+
+The backend shim's endpoint contracts (meta/graph/history/usage/commits/update/query —
+advisories parsed only when `vulns > 0`, write-prefix refusal, `history_current: true`)
+are pinned in the `embedded_ui_wiring_smoke` node harness with a stubbed engine.
 
 ## End-to-end (`tests/integration.rs`)
 

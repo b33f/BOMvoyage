@@ -100,9 +100,7 @@ impl Api {
         // for exactly the head the current scan recorded.
         let history_current = !history_head.is_empty() && history_head == head_sha;
 
-        let counts = conn
-            .query("MATCH (p:Package) RETURN p.ecosystem AS eco, count(DISTINCT p.name) AS n ORDER BY n DESC")
-            .map_err(rel_io)?;
+        let counts = conn.query(queries::META_COUNTS).map_err(rel_io)?;
         let c_eco = counts.header.columns.iter().position(|c| *c == "eco");
         let c_n = counts.header.columns.iter().position(|c| *c == "n");
         let ecosystems: Vec<serde_json::Value> = counts
@@ -121,9 +119,7 @@ impl Api {
             })
             .collect();
 
-        let total = conn
-            .query("MATCH (p:Package) RETURN count(p) AS n")
-            .map_err(rel_io)?;
+        let total = conn.query(queries::META_TOTAL).map_err(rel_io)?;
         let total_packages = total
             .rows
             .first()
@@ -137,9 +133,7 @@ impl Api {
         // Detailed-mode marker: how many packages carry deps.dev data. The
         // UI only offers the vulnerable-dependencies console preset when
         // this is > 0.
-        let detailed = conn
-            .query("MATCH (p:Package) WHERE p.depsdev_status IS NOT NULL RETURN count(p) AS n")
-            .map_err(rel_io)?;
+        let detailed = conn.query(queries::META_DETAILED).map_err(rel_io)?;
         let detailed_packages = detailed
             .rows
             .first()

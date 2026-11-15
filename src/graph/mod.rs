@@ -381,8 +381,8 @@ fn scan_quality_label(out: &ScanOutput) -> &'static str {
 }
 
 /// Current UTC instant as ISO-8601 (`YYYY-MM-DDTHH:MM:SSZ`), from the Unix
-/// clock — no chrono dependency.
-fn now_iso() -> String {
+/// clock — no chrono dependency. Shared with the site exporter.
+pub(crate) fn now_iso() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
