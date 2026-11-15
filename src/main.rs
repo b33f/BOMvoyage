@@ -86,12 +86,14 @@ fn run(cli: &Cli) -> ToolResult<()> {
             open,
             max_commits,
         }) => {
-            let db = Arc::new(Database::open(&db.to_string_lossy())?);
-            graph::ensure_schema(&db)?;
+            let db_path = db.clone();
+            let opened = Arc::new(Database::open(&db.to_string_lossy())?);
+            graph::ensure_schema(&opened)?;
             warn_vuln_details_without_detailed(detailed, vuln_details);
             scan_and_serve(
                 &effective_path(path)?,
-                db,
+                opened,
+                &db_path,
                 *port,
                 *open,
                 *max_commits,
@@ -170,10 +172,11 @@ fn all_in_one(
     vuln_details: bool,
     no_update_check: bool,
 ) -> ToolResult<()> {
-    let db = Arc::new(Database::open(&db.to_string_lossy())?);
-    graph::ensure_schema(&db)?;
+    let opened = Arc::new(Database::open(&db.to_string_lossy())?);
+    graph::ensure_schema(&opened)?;
     scan_and_serve(
         path,
+        opened,
         db,
         port,
         true,
@@ -191,6 +194,7 @@ fn all_in_one(
 fn scan_and_serve(
     path: &Path,
     db: Arc<Database>,
+    db_path: &Path,
     port: u16,
     open_browser: bool,
     max_commits: u64,
@@ -300,7 +304,9 @@ fn scan_and_serve(
         };
         let _ = opened;
     }
-    server::serve(db, &repo_name, port, history_done)?;
+    // The db file's path rides along: on-demand repo scans (the UI's URL
+    // box) write each repo to its own sibling database file and hot-swap.
+    server::serve(db, db_path, &repo_name, port, history_done)?;
     Ok(())
 }
 

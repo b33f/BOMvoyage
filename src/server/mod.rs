@@ -60,6 +60,7 @@ pub fn install_shutdown_handler() {
 /// read timeout, and the process exit reclaims them.
 pub fn serve(
     db: Arc<Database>,
+    db_path: &std::path::Path,
     repo_name: &str,
     port: u16,
     history_done: Option<mpsc::Receiver<()>>,
@@ -68,7 +69,8 @@ pub fn serve(
     let addr = listener.local_addr()?;
     eprintln!("BOMvoyage explorer: http://127.0.0.1:{}", addr.port());
     let api = Arc::new(Api {
-        db,
+        db: std::sync::RwLock::new(db),
+        db_path: db_path.to_path_buf(),
         repo_name: repo_name.to_string(),
     });
     // Non-blocking accept + poll: the blocking `incoming()` iterator cannot
@@ -133,6 +135,12 @@ fn route(stream: &mut TcpStream, req: &Request, api: &Api) -> std::io::Result<()
         ("GET", "/search.js") => {
             respond(stream, 200, "application/javascript", SEARCH_JS.as_bytes())
         }
+        ("GET", "/ondemand.js") => respond(
+            stream,
+            200,
+            "application/javascript",
+            ONDEMAND_JS.as_bytes(),
+        ),
         ("GET", "/style.css") => respond(stream, 200, "text/css", STYLE_CSS.as_bytes()),
         ("GET", "/cytoscape.min.js") => {
             respond(stream, 200, "application/javascript", CYTOSCAPE_JS)
@@ -255,6 +263,7 @@ mod tests {
             .expect("ephemeral db opens");
             super::serve(
                 std::sync::Arc::new(db),
+                std::path::Path::new("shutdown-test.rl"),
                 "shutdown-test",
                 0, // ephemeral port; no request is ever made
                 None,

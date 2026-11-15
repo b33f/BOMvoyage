@@ -15,6 +15,7 @@ const FIELD_SEP: u8 = 0x1f;
 
 fn git_child(repo: &std::path::Path, args: &[String]) -> ToolResult<std::process::Child> {
     Command::new("git")
+        .env("GIT_TERMINAL_PROMPT", "0")
         .arg("-C")
         .arg(repo)
         .arg("-c")
@@ -110,8 +111,19 @@ pub fn fetch_github_repo(spec: &str) -> ToolResult<std::path::PathBuf> {
         std::fs::create_dir_all(dir.parent().unwrap_or(std::path::Path::new("/")))?;
         run_simple(
             dir.parent().unwrap_or(std::path::Path::new("/")),
-            &["clone".into(), url, dir.to_string_lossy().into()],
-        )?;
+            &["clone".into(), url.clone(), dir.to_string_lossy().into()],
+        )
+        .map_err(|e| {
+            // a 404/private repo makes git ask for credentials — surface
+            // the real problem instead of a credential prompt
+            let msg = e.to_string();
+            if msg.contains("could not read Username") || msg.contains("terminal prompts disabled")
+            {
+                ToolError::Other(format!("no such repo (or private): {url}"))
+            } else {
+                e
+            }
+        })?;
     }
     Ok(dir)
 }

@@ -66,7 +66,6 @@ fn queries_js() -> ToolResult<String> {
 fn index_html() -> ToolResult<String> {
     let inject = r#"<script src="queries.js"></script>
 <script src="wasm-backend.js"></script>
-<script src="ondemand.js"></script>
 <script src="cytoscape.min.js"></script>"#;
     let html =
         crate::server::INDEX_HTML.replace("<script src=\"cytoscape.min.js\"></script>", inject);

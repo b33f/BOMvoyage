@@ -1257,20 +1257,9 @@ function escapeHtml(s) {
 
 // ---------------------------------------------------------------- init
 
-async function init() {
-  // On-demand repos (static-site URL box) land here: fresh full layout,
-  // no stale query result, areas view (no attribution exists to group by).
-  window.BOMVOYAGE_ON_GRAPH_REBUILT = () => {
-    needsFullLayout = true;
-    queryElements = null;
-    lastCypher = null;
-    $("query-pill").hidden = true;
-    pausePlay();
-    setView("areas");
-    refresh();
-  };
-  const meta = await fetchJson("api/meta");
-  detailedPackages = meta.detailed_packages || 0;
+/// The meta line in the app bar: counts, scan date, ecosystem badges,
+/// version chip, project title.
+function renderMeta(meta) {
   const badges = (meta.ecosystems || [])
     .map((e) => `<span class="badge"><span class="swatch" style="background:${ECOSYSTEM_COLORS[e.ecosystem] || ECOSYSTEM_COLORS.generic}"></span>${escapeHtml(e.ecosystem)} · ${e.names}</span>`)
     .join("");
@@ -1280,7 +1269,6 @@ async function init() {
     $("project").hidden = false;
     document.title = `${project} · BOMvoyage`;
   }
-  // Subtle compiled-in version chip beside the brand.
   if (meta.version) {
     const v = $("version");
     v.textContent = `v${meta.version}`;
@@ -1290,7 +1278,33 @@ async function init() {
     `<span><strong>${meta.total_packages}</strong> package versions</span><span class="sep">·</span>` +
     `<span>scanned ${fmtDate(meta.last_scanned_at)}</span><span class="sep">·</span>` +
     `<span>resolution <strong>${escapeHtml(meta.scan_quality)}</strong></span>${badges}`;
+}
 
+async function init() {
+  // A swapped graph (on-demand repo scan, UI box) lands here: full
+  // re-read of meta + commits + a fresh layout.
+  window.BOMVOYAGE_ON_GRAPH_REBUILT = async () => {
+    needsFullLayout = true;
+    queryElements = null;
+    lastCypher = null;
+    $("query-pill").hidden = true;
+    pausePlay();
+    try {
+      const meta = await fetchJson("api/meta");
+      renderMeta(meta);
+      detailedPackages = meta.detailed_packages || 0;
+      addVulnerablePreset();
+      const commitPayload = await fetchJson("api/commits");
+      setCommits(commitPayload.rows || []);
+    } catch (e) {
+      setStatus(`error: ${e.message}`, "error");
+    }
+    setView("areas");
+    refresh();
+  };
+  const meta = await fetchJson("api/meta");
+  renderMeta(meta);
+  detailedPackages = meta.detailed_packages || 0;
   const commitPayload = await fetchJson("api/commits");
   setCommits(commitPayload.rows || []);
   const slider = $("slider");

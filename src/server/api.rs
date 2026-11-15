@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use relate::{Database, Value};
@@ -12,8 +13,36 @@ use crate::graph::{self, queries};
 use crate::server::http::{respond_json, Request};
 
 pub struct Api {
-    pub db: Arc<Database>,
+    /// The served database — swap-locked so an on-demand `--repo` scan can
+    /// hot-swap which graph the explorer is serving.
+    pub db: std::sync::RwLock<Arc<Database>>,
+    /// The db FILE path: on-demand scans write each repo to its own
+    /// sibling file (nothing from two repos ever mixes in one store).
+    pub db_path: PathBuf,
     pub repo_name: String,
+}
+
+impl Api {
+    fn current_db(&self) -> Arc<Database> {
+        self.db.read().expect("db lock").clone()
+    }
+
+    /// The display name of the CURRENTLY served database: the live META
+    /// row's name (updates on a repo swap), else the startup fallback.
+    fn current_name(&self) -> String {
+        match self.current_db().connect() {
+            Ok(mut conn) => match conn.query(queries::META) {
+                Ok(result) => result
+                    .rows
+                    .first()
+                    .and_then(|r| r.first())
+                    .and_then(|v| v.as_string().map(str::to_string))
+                    .unwrap_or_else(|| self.repo_name.clone()),
+                Err(_) => self.repo_name.clone(),
+            },
+            Err(_) => self.repo_name.clone(),
+        }
+    }
 }
 
 /// Query parameter extraction: the first value of `name`.
@@ -72,6 +101,7 @@ impl Api {
                 ("GET", "/api/commits") => self.commits(),
                 ("GET", "/api/update") => Ok(crate::update::snapshot()),
                 ("POST", "/api/query") => self.raw_query(&req.body),
+                ("POST", "/api/scan-repo") => self.scan_repo(&req.body),
                 ("GET", _) | ("POST", _) => Ok(serde_json::json!({"error": "not found"})),
                 _ => Ok(serde_json::json!({"error": "method not allowed"})),
             };
@@ -85,7 +115,7 @@ impl Api {
     }
 
     fn connect(&self) -> std::io::Result<relate::Connection> {
-        self.db.connect().map_err(rel_io)
+        self.current_db().connect().map_err(rel_io)
     }
 
     /// `GET /api/meta` — public for the integration tests too.
@@ -145,7 +175,7 @@ impl Api {
             .unwrap_or(0);
 
         Ok(serde_json::json!({
-            "name": self.repo_name,
+            "name": self.current_name(),
             "version": env!("CARGO_PKG_VERSION"),
             "head_sha": head_sha,
             "last_scanned_at": scanned_at,
@@ -296,6 +326,62 @@ impl Api {
         let mut conn = self.connect()?;
         let result = conn.query(queries::COMMITS).map_err(rel_io)?;
         Ok(query_to_json(&result))
+    }
+
+    /// On-demand repo swap (the UI's URL box, server mode): validate the
+    /// org/repo, clone-or-refresh it into the cache, scan it fully into its
+    /// OWN database file (nothing from two repos ever mixes), and hot-swap
+    /// the served database. Loopback-only server, spec-validated — the same
+    /// trust level as the read-only console.
+    fn scan_repo(&self, body: &[u8]) -> std::io::Result<serde_json::Value> {
+        let parsed: serde_json::Value = match serde_json::from_slice(body) {
+            Ok(v) => v,
+            Err(_) => return Ok(serde_json::json!({ "error": "missing repo" })),
+        };
+        let Some(spec) = parsed.get("repo").and_then(|v| v.as_str()) else {
+            return Ok(serde_json::json!({ "error": "missing repo" }));
+        };
+        let (org, repo) = match crate::scan::git::validate_github_spec(spec) {
+            Ok(pair) => pair,
+            Err(e) => return Ok(serde_json::json!({ "error": e.to_string() })),
+        };
+
+        let checkout = match crate::scan::git::fetch_github_repo(spec) {
+            Ok(p) => p,
+            Err(e) => return Ok(serde_json::json!({ "error": e.to_string() })),
+        };
+        let scan_out = match crate::scan::run(&checkout, crate::scan::ScanCaps::default()) {
+            Ok(o) => o,
+            Err(e) => return Ok(serde_json::json!({ "error": e.to_string() })),
+        };
+        for w in &scan_out.warnings {
+            eprintln!("warning: {w}");
+        }
+
+        let db_file = ondemand_db_path(&self.db_path, &format!("{org}/{repo}"));
+        let new_db = match crate::graph::SbomGraph::open_writable(&db_file) {
+            Ok(g) => g,
+            Err(e) => return Ok(serde_json::json!({ "error": e.to_string() })),
+        };
+        if let Err(e) = new_db.write_scan(&scan_out) {
+            return Ok(serde_json::json!({ "error": e.to_string() }));
+        }
+
+        // hot-swap the served database
+        *self.db.write().expect("db lock") = Arc::new(new_db.db);
+
+        eprintln!(
+            "on-demand scan: {spec} — {} packages across {} commits (served from {})",
+            scan_out.packages.len(),
+            scan_out.commits.len(),
+            db_file.display()
+        );
+        Ok(serde_json::json!({
+            "ok": true,
+            "repo": format!("{org}/{repo}"),
+            "packages": scan_out.packages.len(),
+            "commits": scan_out.commits.len(),
+        }))
     }
 
     /// Raw read-only Cypher: mutation prefixes are refused before the engine
@@ -624,6 +710,20 @@ fn version_suffix(version: &str) -> String {
     }
 }
 
+/// The per-repo database file an on-demand scan writes to: a sibling of
+/// the original (`bomvoyage.rl` -> `bomvoyage.neo4j_neo4j-java-driver.rl`)
+/// — nothing from two repos ever mixes in one store.
+fn ondemand_db_path(db_path: &Path, spec: &str) -> PathBuf {
+    let sanitized = spec.replace('/', "_");
+    let stem = db_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "bomvoyage".into());
+    let mut p: PathBuf = db_path.to_path_buf();
+    p.set_file_name(format!("{stem}.{sanitized}.rl"));
+    p
+}
+
 /// Any engine or tool error becomes a 500 with its Display text.
 fn rel_io<E: std::fmt::Display>(e: E) -> std::io::Error {
     std::io::Error::other(e.to_string())
@@ -632,6 +732,22 @@ fn rel_io<E: std::fmt::Display>(e: E) -> std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ondemand_db_paths_never_mix_repos() {
+        let base = Path::new("/data/bomvoyage.rl");
+        assert_eq!(
+            ondemand_db_path(base, "neo4j/neo4j-java-driver"),
+            Path::new("/data/bomvoyage.neo4j_neo4j-java-driver.rl")
+        );
+        assert_eq!(
+            ondemand_db_path(base, "b33f/BOMvoyage"),
+            Path::new("/data/bomvoyage.b33f_BOMvoyage.rl")
+        );
+        // different repos -> different files; the original is untouched
+        assert_ne!(ondemand_db_path(base, "a/b"), ondemand_db_path(base, "c/d"));
+        assert_eq!(ondemand_db_path(base, "a/b").parent(), base.parent());
+    }
 
     #[test]
     fn url_decode_percent_plus_and_multibyte() {

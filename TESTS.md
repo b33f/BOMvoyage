@@ -11,7 +11,7 @@ Run everything locally with:
 $ cargo test
 ```
 
-The suite is 77 tests: 73 unit tests in the library plus four end-to-end
+The suite is 78 tests: 74 unit tests in the library plus four end-to-end
 integration tests (`tests/integration.rs`) that build a real git repository
 commit by commit and run the full scan → graph → temporal-query pipeline.
 
@@ -88,6 +88,7 @@ commit by commit and run the full scan → graph → temporal-query pipeline.
 |---|---|
 | `url_decode_percent_plus_and_multibyte` | Query-string decoding: `%XX` escapes, `+` as space, multibyte UTF-8; malformed input passes through literally, never panics |
 | `query_param_takes_first_value` | Repeated query params take the first value; absent params return `None` |
+| `ondemand_db_paths_never_mix_repos` | The on-demand repo swap writes each scanned repo to its OWN sibling database file (`bomvoyage.<org>_<repo>.rl`) — nothing from two repos ever mixes in one store |
 | `embedded_ui_scripts_parse` | Every embedded UI script (`app.js`, `search.js`) parses under `node --check` — the hand-rolled JS has no build step, so a syntax error ships silently and blanks the explorer (skipped where `node` is absent; CI always has it, plus an explicit lint-job gate) |
 | `index_references_only_embedded_assets` | `index.html` references only scripts/styles the server actually embeds and routes |
 | `serve_shuts_down_on_flag` | The serve accept loop observes the shutdown flag and returns promptly — what makes Ctrl+C a clean stop (stop accepting → wait for the history walk) instead of a default signal kill; no signals in the test, the flag is set directly |

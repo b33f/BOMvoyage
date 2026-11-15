@@ -291,7 +291,10 @@ fn detailed_mode_properties_survive_rescan() {
     // vulnerable-deps console preset off this field.
     {
         let api = bomvoyage::server::api::Api {
-            db: std::sync::Arc::new(relate::Database::open(&db.to_string_lossy()).expect("open")),
+            db: std::sync::RwLock::new(std::sync::Arc::new(
+                relate::Database::open(&db.to_string_lossy()).expect("open"),
+            )),
+            db_path: db.clone(),
             repo_name: "demo".into(),
         };
         let meta = api.meta().expect("meta");
@@ -487,7 +490,10 @@ fn detailed_mode_properties_survive_rescan() {
     // when vulns > 0, license/license links present, clean nodes null.
     {
         let api = bomvoyage::server::api::Api {
-            db: std::sync::Arc::new(relate::Database::open(&db.to_string_lossy()).expect("open")),
+            db: std::sync::RwLock::new(std::sync::Arc::new(
+                relate::Database::open(&db.to_string_lossy()).expect("open"),
+            )),
+            db_path: db.clone(),
             repo_name: "demo".into(),
         };
         let g = api
@@ -515,7 +521,10 @@ fn detailed_mode_properties_survive_rescan() {
     }
     {
         let api = bomvoyage::server::api::Api {
-            db: std::sync::Arc::new(relate::Database::open(&db.to_string_lossy()).expect("open")),
+            db: std::sync::RwLock::new(std::sync::Arc::new(
+                relate::Database::open(&db.to_string_lossy()).expect("open"),
+            )),
+            db_path: db.clone(),
             repo_name: "demo".into(),
         };
         let g = api
@@ -541,7 +550,10 @@ fn detailed_mode_properties_survive_rescan() {
     // offering the vulnerable-deps preset.
     {
         let api = bomvoyage::server::api::Api {
-            db: std::sync::Arc::new(relate::Database::open(&db.to_string_lossy()).expect("open")),
+            db: std::sync::RwLock::new(std::sync::Arc::new(
+                relate::Database::open(&db.to_string_lossy()).expect("open"),
+            )),
+            db_path: db.clone(),
             repo_name: "demo".into(),
         };
         let meta = api.meta().expect("meta");

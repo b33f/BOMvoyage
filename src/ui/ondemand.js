@@ -208,6 +208,9 @@ window.BOMVOYAGE_ONDEMAND = (function () {
     if (res.status === 403 || res.status === 429) {
       throw new Error("GitHub API rate limit hit — try again in a while");
     }
+    if (res.status === 404) {
+      throw new Error("GitHub API 404 — no such repo (or it is private)");
+    }
     if (!res.ok) throw new Error(`GitHub API ${res.status} for ${url.split("?")[0]}`);
     return res.json();
   }
@@ -290,7 +293,9 @@ window.BOMVOYAGE_ONDEMAND = (function () {
   // ------------------------------------------------------------- wiring
 
   async function wire() {
-    if (!window.BOMVOYAGE_STATIC) return; // server mode: the box never shows
+    // The box works in BOTH modes: on a generated static site it scans
+    // in-browser; against the server it calls /api/scan-repo, which
+    // clones + scans server-side and hot-swaps the served database.
     const box = document.getElementById("repo-box");
     const input = document.getElementById("repo-input");
     const go = document.getElementById("repo-go");
@@ -305,11 +310,20 @@ window.BOMVOYAGE_ONDEMAND = (function () {
         go.disabled = true;
         input.disabled = true;
         set("scanning …");
-        const result = await scanRepo(spec);
-        await window.BOMVOYAGE_STATIC.replayStages(result.stages);
-        set(`${result.packageCount} packages · ${result.manifestCount} manifests` +
-            (result.truncated ? " · tree truncated (huge repo — partial)" : ""));
-        if (window.BOMVOYAGE_ON_GRAPH_REBUILT) window.BOMVOYAGE_ON_GRAPH_REBUILT();
+        if (window.BOMVOYAGE_STATIC) {
+          const result = await scanRepo(spec);
+          await window.BOMVOYAGE_STATIC.replayStages(result.stages);
+          set(`${result.packageCount} packages · ${result.manifestCount} manifests` +
+              (result.truncated ? " · tree truncated (huge repo — partial)" : ""));
+        } else {
+          const res = await fetchJson("api/scan-repo", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ repo: spec }),
+          });
+          set(`${res.repo}: ${res.packages} packages · ${res.commits} commits`);
+        }
+        if (window.BOMVOYAGE_ON_GRAPH_REBUILT) await window.BOMVOYAGE_ON_GRAPH_REBUILT();
       } catch (e) {
         set(`failed: ${e.message}`);
       } finally {
