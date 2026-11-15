@@ -485,24 +485,35 @@ function baseOf(id) {
   return at > 4 ? id.slice(0, at) : null;
 }
 
-/// A brand-new dependency arrives purple with a pink outline and fades to
-/// the standard green (border fading out) — it visibly "pops in" without
-/// breaking the canvas's color grammar. The fade is deliberately slower
-/// than the motion: twice the base animation time. The inline styles are
-/// cleared afterwards so the stylesheet regains control (e.g. a later
-/// `vulns > 0` must be able to turn the node red). Hubs (dev:/area:) are
-/// groupings, not dependencies — they arrive plain.
 /// A brand-new dependency arrives purple, an upgraded version arrives
 /// yellow (on the replaced version's spot), and both fade to the node's
 /// TRUE color — green, or red when it arrives with known advisories
-/// (border fading out throughout). The inline styles are cleared
-/// afterwards so the stylesheet regains full control. Hubs (dev:/area:)
-/// are groupings, not dependencies — they arrive plain.
+/// (border fading out throughout). The fade is slow — twice the base
+/// motion time — and deliberately NOT gated on travel: a day change
+/// never waits for it, and a re-arrival mid-fade (an update landing
+/// while the previous transition is still running) restarts the
+/// transition from the current color immediately. The inline styles are
+/// cleared afterwards so the stylesheet regains full control (e.g. a
+/// later `vulns > 0` must be able to turn the node red). Hubs
+/// (dev:/area:) are groupings, not dependencies — they arrive plain.
+const arrivalAnims = new Map(); // ele id -> {anim, timer} of the flourish in flight
+
 function arriveWithFlourish(ele, data, isUpgrade) {
   if (data.type !== "package") return;
   const from = isUpgrade ? UPGRADE_YELLOW : ARRIVAL_PURPLE;
   const to = (data.vulns || 0) > 0 ? VULNERABLE_RED : PACKAGE_GREEN;
-  const fadeMs = (ANIM_MS * 2) / playbackRate;
+  const fadeMs = (ANIM_MS * 4) / playbackRate; // twice the earlier fade
+  // An update landing mid-fade restarts the transition at once: stop the
+  // prior flourish's animation (cytoscape otherwise QUEUES the new one
+  // behind it) and cancel its cleanup so it can't cut the new one short.
+  const prior = arrivalAnims.get(ele.id());
+  if (prior) {
+    try {
+      prior.anim.stop();
+    } catch (_) {}
+    liveAnimations.delete(prior.anim);
+    clearTimeout(prior.timer);
+  }
   // Marked while fading: the sweep waits for position motion but not for
   // this color crossfade (it continues gracefully across steps).
   ele.addClass("arriving");
@@ -511,7 +522,7 @@ function arriveWithFlourish(ele, data, isUpgrade) {
     "border-color": ARRIVAL_PINK,
     "border-width": 2.5,
   });
-  ele.animate(
+  const anim = ele.animation(
     {
       style: {
         "background-color": to,
@@ -521,13 +532,18 @@ function arriveWithFlourish(ele, data, isUpgrade) {
     },
     { duration: fadeMs, easing: "ease-in-out" }
   );
-  // Wait for the fade to finish, then hand styling back to the stylesheet.
-  setTimeout(() => {
+  liveAnimations.add(anim);
+  anim.play();
+  // When the fade finishes, hand styling back to the stylesheet.
+  const timer = setTimeout(() => {
+    arrivalAnims.delete(ele.id());
+    liveAnimations.delete(anim);
     if (ele.inside()) {
       ele.removeClass("arriving");
       ele.removeStyle();
     }
   }, fadeMs + 100);
+  arrivalAnims.set(ele.id(), { anim, timer });
 }
 
 // ------------------------------------------------------- gradual drift
