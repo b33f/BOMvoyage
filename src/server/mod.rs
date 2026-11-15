@@ -73,6 +73,10 @@ pub fn serve(
         }
         match listener.accept() {
             Ok((stream, _)) => {
+                // A stream accepted from a non-blocking listener inherits
+                // O_NONBLOCK on macOS (Linux clears it) — without this every
+                // request dies with EAGAIN on its first read.
+                let _ = stream.set_nonblocking(false);
                 let api = Arc::clone(&api);
                 std::thread::spawn(move || handle_connection(stream, &api));
             }
@@ -181,6 +185,15 @@ mod tests {
             assert!(
                 INDEX_HTML.contains(src.trim_start_matches('/')),
                 "index.html references {src} but the check didn't find it"
+            );
+        }
+        // The motion legend's static swatches must carry the same colors as
+        // the arrival-flourish constants in app.js (yellow = version update,
+        // purple = newly added dependency).
+        for hex in ["f2cc60", "a371f7"] {
+            assert!(
+                INDEX_HTML.contains(hex) && APP_JS.contains(hex),
+                "motion legend color #{hex} must appear in both index.html and app.js"
             );
         }
     }
