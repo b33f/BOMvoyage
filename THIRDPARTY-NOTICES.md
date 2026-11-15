@@ -153,6 +153,7 @@ license files (see the crates.io package of each crate for its full source).
 - anstyle-parse 1.0.0
 - anstyle-query 1.1.5
 - anstyle-wincon 3.0.11
+- arraydeque 0.5.1
 - base64 0.22.1
 - bitflags 2.13.2
 - block-buffer 0.10.4
@@ -173,9 +174,11 @@ license files (see the crates.io package of each crate for its full source).
 - crc32fast 1.5.5
 - crossbeam-utils 0.8.23
 - crypto-common 0.1.7
+- ctrlc 3.5.2
 - digest 0.10.7
 - displaydoc 0.2.7
 - errno 0.3.15
+- filetime 0.2.29
 - find-msvc-tools 0.1.15
 - flate2 1.1.11
 - form_urlencoded 1.2.2
@@ -197,6 +200,12 @@ license files (see the crates.io package of each crate for its full source).
 - is_terminal_polyfill 1.70.2
 - itoa 1.0.19
 - js-sys 0.3.107
+- lexical-core 1.0.6
+- lexical-parse-float 1.0.6
+- lexical-parse-integer 1.0.6
+- lexical-util 1.0.7
+- lexical-write-float 1.0.6
+- lexical-write-integer 1.0.6
 - libc 0.2.191
 - lock_api 0.4.14
 - log 0.4.35
@@ -254,6 +263,7 @@ license files (see the crates.io package of each crate for its full source).
 - typenum 1.20.1
 - ureq 2.12.1
 - url 2.5.8
+- version_check 0.9.5
 - wasm-bindgen 0.2.130
 - wasm-bindgen-macro 0.2.130
 - wasm-bindgen-macro-support 0.2.130
@@ -277,6 +287,7 @@ license files (see the crates.io package of each crate for its full source).
 - windows_x86_64_msvc 0.52.6
 - xattr 1.7.0
 
+
 ### `MIT OR Apache-2.0 OR LGPL-2.1-or-later`
 
 - r-efi 6.0.0
@@ -284,19 +295,6 @@ license files (see the crates.io package of each crate for its full source).
 ### `MIT OR Zlib OR Apache-2.0`
 
 - miniz_oxide 0.9.1
-
-### `MIT/Apache-2.0`
-
-- arraydeque 0.5.1
-- ctrlc 3.5.2
-- filetime 0.2.29
-- lexical-core 1.0.6
-- lexical-parse-float 1.0.6
-- lexical-parse-integer 1.0.6
-- lexical-util 1.0.7
-- lexical-write-float 1.0.6
-- lexical-write-integer 1.0.6
-- version_check 0.9.5
 
 ### `Unicode-3.0`
 
