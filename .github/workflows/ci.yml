@@ -50,6 +50,14 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets -- -D warnings
+      # The UI is hand-rolled embedded JS with no build step — a syntax
+      # error ships silently and blanks the explorer. Node is preinstalled
+      # on GitHub runners; the same check (skipped when node is absent)
+      # also runs as part of `cargo test` on every platform.
+      - name: Embedded UI scripts parse
+        run: |
+          node --check src/ui/app.js
+          node --check src/ui/search.js
 
   deps:
     # Supply-chain gate: RustSec advisories (including known-malicious
