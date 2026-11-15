@@ -225,6 +225,19 @@ fn scan_and_serve(
     // quits. Without this, SIGINT kills the process mid-WAL-write.
     server::install_shutdown_handler();
 
+    // Bind the port BEFORE any scanning: a busy port must fail fast with a
+    // friendly message, not after minutes of clone/scan/detailed work.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port)).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AddrInUse {
+            ToolError::Other(format!(
+                "port {port} is already in use — another BOMvoyage explorer is probably still \
+                 running on it (stop it, or pick another port with --port <port>)"
+            ))
+        } else {
+            ToolError::Io(e)
+        }
+    })?;
+
     let head = scan::git::head_sha(path)?;
     let history_current = graph::stored_history_head(&db)?.as_deref() == Some(head.as_str());
 
@@ -313,7 +326,7 @@ fn scan_and_serve(
     }
     // The db file's path rides along: on-demand repo scans (the UI's URL
     // box) write each repo to its own sibling database file and hot-swap.
-    server::serve(db, db_path, repo_spec, &repo_name, port, history_done)?;
+    server::serve(listener, db, db_path, repo_spec, &repo_name, history_done)?;
     Ok(())
 }
 

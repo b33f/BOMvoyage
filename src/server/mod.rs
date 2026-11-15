@@ -59,14 +59,13 @@ pub fn install_shutdown_handler() {
 /// In-flight connection threads are not joined — each already has a 30s
 /// read timeout, and the process exit reclaims them.
 pub fn serve(
+    listener: TcpListener,
     db: Arc<Database>,
     db_path: &std::path::Path,
     repo_spec: Option<String>,
     repo_name: &str,
-    port: u16,
     history_done: Option<mpsc::Receiver<()>>,
 ) -> std::io::Result<()> {
-    let listener = TcpListener::bind(("127.0.0.1", port))?;
     let addr = listener.local_addr()?;
     eprintln!("BOMvoyage explorer: http://127.0.0.1:{}", addr.port());
     let api = Arc::new(Api {
@@ -263,12 +262,13 @@ mod tests {
                 },
             )
             .expect("ephemeral db opens");
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
             super::serve(
+                listener,
                 std::sync::Arc::new(db),
                 std::path::Path::new("shutdown-test.rl"),
                 None,
                 "shutdown-test",
-                0, // ephemeral port; no request is ever made
                 None,
             )
             .expect("serve returns cleanly on shutdown");
