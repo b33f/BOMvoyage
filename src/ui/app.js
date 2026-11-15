@@ -499,6 +499,9 @@ function baseOf(id) {
 function arriveWithFlourish(ele, data) {
   if (data.type !== "package") return;
   const fadeMs = (ANIM_MS * 2) / playbackRate;
+  // Marked while fading: the sweep waits for position motion but not for
+  // this color crossfade (it continues gracefully across steps).
+  ele.addClass("arriving");
   ele.style({
     "background-color": ARRIVAL_PURPLE,
     "border-color": ARRIVAL_PINK,
@@ -516,7 +519,10 @@ function arriveWithFlourish(ele, data) {
   );
   // Wait for the fade to finish, then hand styling back to the stylesheet.
   setTimeout(() => {
-    if (ele.inside()) ele.removeStyle();
+    if (ele.inside()) {
+      ele.removeClass("arriving");
+      ele.removeStyle();
+    }
   }, fadeMs + 100);
 }
 
@@ -1256,11 +1262,20 @@ function startPlay() {
     const t0 = performance.now();
     await refresh();
     if (!playing) return;
+    // The slider must not outrun the motion: hold until the day's
+    // animations finished, then dwell out the rest of the step budget.
+    // (Arrival fades are excluded — a color crossfade may continue
+    // gracefully across steps; it is position motion that must never
+    // be chopped mid-glide.)
+    await animationsSettled();
+    if (!playing) return;
     const slider = $("slider");
     const atEnd = Number(slider.value) >= days.length; // HEAD
-    // ~30s for a full sweep, but never more than 2.5s parked on one day —
-    // the provisional timeline (one day) would otherwise sit frozen for
-    // the whole sweep budget.
+    // ~30s for a full sweep when animation is faster than the budget,
+    // but never more than 2.5s parked on one day — the provisional
+    // timeline (one day) would otherwise sit frozen for the whole budget.
+    // Animation-heavy days simply run slower than this budget: the sweep
+    // is animation-bound by design.
     const interval = Math.min(2500, Math.max(120, PLAY_SWEEP_MS / Math.max(days.length, 1))) / playbackRate;
     const wait = Math.max(0, interval - (performance.now() - t0));
     playTimer = setTimeout(() => {
@@ -1270,6 +1285,31 @@ function startPlay() {
     }, atEnd ? PLAY_HOLD_MS / playbackRate : wait);
   };
   step();
+}
+
+/// Resolves once no position animation is in flight (bounded — a stuck
+/// animation may never delay a sweep longer than the cap). A seeded cose
+/// layout spends its first ticks computing before any node animates, so
+/// the running layout handle counts as motion too. Exits early when the
+/// sweep is paused meanwhile.
+function animationsSettled() {
+  if (!cy) return Promise.resolve();
+  const cap = (ANIM_MS * 2.5) / playbackRate;
+  const t0 = performance.now();
+  return new Promise((resolve) => {
+    const poll = () => {
+      if (!playing || !cy) return resolve();
+      const moving =
+        runningLayout !== null ||
+        cy
+          .nodes()
+          .toArray()
+          .some((n) => n.animated() && !n.hasClass("arriving"));
+      if (!moving || performance.now() - t0 > cap) return resolve();
+      setTimeout(poll, 50);
+    };
+    poll();
+  });
 }
 
 // ---------------------------------------------------------------- cypher
