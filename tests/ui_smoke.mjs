@@ -218,23 +218,23 @@ const eg = (s, t, k = "lockfile") => ({ data: { source: s, target: t, source_kin
   const seeded = sandbox.layoutOptions(10, true);
   if (seeded.randomize !== false || seeded.animate === false)
     throw new Error(`seeded layout must not randomize and must animate: ${JSON.stringify(seeded)}`);
-  if (seeded.animationDuration !== 450)
-    throw new Error(`base animation is 450ms (50% slower than before), got ${seeded.animationDuration}`);
+  if (seeded.animationDuration !== 900)
+    throw new Error(`base animation is 900ms (half of the previous 450ms), got ${seeded.animationDuration}`);
   const fresh = sandbox.layoutOptions(10);
   if (fresh.randomize !== true || fresh.animate !== false)
     throw new Error(`first-render layout must randomize, unanimated: ${JSON.stringify(fresh)}`);
 }
-// 2× toggle halves the animation duration
+// 4× toggle divides the animation duration by four
 {
   sandbox.toggleRate();
   const fast = sandbox.layoutOptions(10, true);
   if (fast.animationDuration !== 225)
-    throw new Error(`2× must halve the animation duration, got ${fast.animationDuration}`);
+    throw new Error(`4× must divide the animation duration by four, got ${fast.animationDuration}`);
   if (!sandbox.document.getElementById("rate-btn").className.includes("active"))
-    throw new Error("rate button must be flagged active at 2×");
+    throw new Error("rate button must be flagged active at 4×");
   sandbox.toggleRate();
-  if (sandbox.layoutOptions(10, true).animationDuration !== 450)
-    throw new Error("toggling 2× off must restore the 450ms base");
+  if (sandbox.layoutOptions(10, true).animationDuration !== 900)
+    throw new Error("toggling 4× off must restore the 900ms base");
 }
 
 console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes; version chip renders; diff + seeded-layout verified");

@@ -20,10 +20,11 @@ const PACKAGE_GREEN = "#3fb950";
 const ARRIVAL_PURPLE = "#a371f7";
 const ARRIVAL_PINK = "#ff7bac";
 
-/// Base duration of graph motion (layout glides, fan animation). The 2×
-/// control halves it — and halves the sweep pacing — while it's active.
-const ANIM_MS = 450;
-let playbackRate = 1;        // 1 or 2 (the 2× toggle)
+/// Base duration of graph motion (layout glides, fan animation). The 4×
+/// control divides it by four — and divides the sweep pacing by four —
+/// while it's active.
+const ANIM_MS = 900;
+let playbackRate = 1;        // 1 or 4 (the 4× toggle)
 let runningLayout = null;    // layout whose animation is in flight (stoppable on pause)
 
 /// Node kinds a query can return, with their canvas look. Package nodes are
@@ -1186,10 +1187,10 @@ function pausePlay() {
   updatePlayButtons();
 }
 
-/// The 2× control: double-speed animations and sweep pacing.
+/// The 4× control: quadruple-speed animations and sweep pacing.
 function toggleRate() {
-  playbackRate = playbackRate === 1 ? 2 : 1;
-  $("rate-btn").classList.toggle("active", playbackRate === 2);
+  playbackRate = playbackRate === 1 ? 4 : 1;
+  $("rate-btn").classList.toggle("active", playbackRate === 4);
 }
 
 /// Manual navigation is an implicit pause: the sweep must never fight the

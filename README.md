@@ -51,8 +51,8 @@ Time travel glides: packages that exist on both days keep their exact spot
 remaining nodes animate smoothly to their new places. A dependency that
 first appears arrives **purple with a pink outline** and fades to the
 standard green as it settles in beside its dependents. The sweep controls
-(⏮ ▶ ⏸) play the whole history day by day as an animation, and **2×**
-doubles the playback speed; pausing freezes the frame instantly.
+(⏮ ▶ ⏸) play the whole history day by day as an animation, and **4×**
+quadruples the playback speed; pausing freezes the frame instantly.
 Click any package to see **who added it, when, its full version timeline, and every
 file that uses it**; click a developer or repo-area hub to list the dependencies
 attributed to it. The raw-Cypher box at the bottom shows the temporal query behind
