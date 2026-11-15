@@ -54,7 +54,15 @@ explains them): a **newly added dependency arrives purple**, a **version
 update arrives yellow** on the replaced version's spot — each outlined in
 pink while it lands, then fading to the package's standing color: **green**,
 or **red** when the version ships with known security advisories (a
-vulnerable package never animates as green). The sweep controls
+vulnerable package never animates as green).
+
+**Time travel in motion** — dependencies arriving, version bumps landing
+on the replaced version's spot, and the slow fade to each package's
+standing color (graph only, 4× speed):
+
+![New dependencies and version updates animating in during time travel](docs/screenshots/arrivals.gif)
+
+The sweep controls
 (⏮ ▶ ⏸) play the whole history day by day as an animation — each step
 waits for the day's motion to finish before advancing, so nothing is
 chopped mid-glide — and **4×** quadruples the playback speed; pausing
