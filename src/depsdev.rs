@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -309,6 +309,25 @@ fn cache_put(dir: Option<&Path>, key: &str, status: u16, body: Option<&serde_jso
     let _ = std::fs::write(path, json.to_string());
 }
 
+// In-flight fetch progress, readable from the server's /api/meta (the
+// walker's detailed pass runs in another thread than the API).
+static FETCH_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+static FETCH_DONE: AtomicUsize = AtomicUsize::new(0);
+static FETCH_TOTAL: AtomicUsize = AtomicUsize::new(0);
+
+/// Live progress of the running detailed fetch: (done, total), or None
+/// when no fetch is in flight.
+pub fn progress_snapshot() -> Option<(usize, usize)> {
+    if FETCH_IN_FLIGHT.load(Ordering::Relaxed) {
+        Some((
+            FETCH_DONE.load(Ordering::Relaxed),
+            FETCH_TOTAL.load(Ordering::Relaxed),
+        ))
+    } else {
+        None
+    }
+}
+
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -367,6 +386,9 @@ fn fetch_versions(targets: &[DetailedTarget], refresh: bool) -> Vec<Result<Fetch
         Mutex::new(Vec::with_capacity(targets.len()));
     let pacer = Pacer::new();
     let total = targets.len();
+    FETCH_TOTAL.store(total, Ordering::Relaxed);
+    FETCH_DONE.store(0, Ordering::Relaxed);
+    FETCH_IN_FLIGHT.store(true, Ordering::Relaxed);
     let done = AtomicUsize::new(0);
     let fetched = AtomicUsize::new(0);
     let cached = AtomicUsize::new(0);
@@ -427,6 +449,7 @@ fn fetch_versions(targets: &[DetailedTarget], refresh: bool) -> Vec<Result<Fetch
             });
         }
     });
+    FETCH_IN_FLIGHT.store(false, Ordering::Relaxed);
     let mut out: Vec<Option<Result<Fetched, String>>> = (0..targets.len()).map(|_| None).collect();
     for (i, r) in results.into_inner().unwrap_or_default() {
         out[i] = Some(r);

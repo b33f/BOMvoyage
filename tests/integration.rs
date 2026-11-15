@@ -296,6 +296,7 @@ fn detailed_mode_properties_survive_rescan() {
             )),
             db_path: db.clone(),
             repo_spec: std::sync::RwLock::new(None),
+            walk_phase: None,
             repo_name: "demo".into(),
         };
         let meta = api.meta().expect("meta");
@@ -496,6 +497,7 @@ fn detailed_mode_properties_survive_rescan() {
             )),
             db_path: db.clone(),
             repo_spec: std::sync::RwLock::new(None),
+            walk_phase: None,
             repo_name: "demo".into(),
         };
         let g = api
@@ -528,6 +530,7 @@ fn detailed_mode_properties_survive_rescan() {
             )),
             db_path: db.clone(),
             repo_spec: std::sync::RwLock::new(None),
+            walk_phase: None,
             repo_name: "demo".into(),
         };
         let g = api
@@ -558,6 +561,7 @@ fn detailed_mode_properties_survive_rescan() {
             )),
             db_path: db.clone(),
             repo_spec: std::sync::RwLock::new(None),
+            walk_phase: None,
             repo_name: "demo".into(),
         };
         let meta = api.meta().expect("meta");
@@ -843,6 +847,7 @@ fn scan_repo_endpoint_refuses_bad_specs_before_any_clone() {
         )),
         db_path: db.clone(),
         repo_spec: std::sync::RwLock::new(None),
+        walk_phase: None,
         repo_name: "demo".into(),
     };
     for bad in ["../etc/passwd", "a/b/c", "just-a-name", "a/b; rm -rf /", ""] {

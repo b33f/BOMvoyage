@@ -254,6 +254,19 @@ main { flex: 1; display: flex; min-height: 0; }
 #canvas-controls button:hover { color: var(--text); background: var(--panel-2); }
 #canvas-controls svg { width: 15px; height: 15px; }
 
+/* scan-progress overlay: big, top-left of the canvas while the walk runs */
+#scan-overlay {
+  position: absolute; top: 18px; left: 18px; z-index: 6;
+  background: rgba(21, 26, 34, 0.94);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius);
+  padding: 14px 22px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.5);
+}
+#scan-overlay[hidden] { display: none; }
+#scan-overlay .big { font-size: 20px; font-weight: 700; color: var(--warn-text); }
+#scan-progress { font-size: 12px; color: var(--muted); margin-top: 4px; min-height: 15px; }
+
 /* The legend wrapper anchors both legend boxes bottom-left; the motion
    legend (arrival colors) sits beside the canvas legend. */
 #legends {

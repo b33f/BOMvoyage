@@ -493,4 +493,17 @@ const eg = (s, t, k = "lockfile") => ({ data: { source: s, target: t, source_kin
     throw new Error("prefill must not clobber what the user typed");
 }
 
+// --- the scan-progress overlay -------------------------------------------
+{
+  el("scan-overlay").hidden = true;
+  sandbox.window.updateScanOverlay({ phase: "walking git history…", progress: "12/177" });
+  const o = el("scan-overlay");
+  if (o.hidden) throw new Error("overlay must show while the walk runs");
+  const progressText = el("scan-progress").textContent;
+  if (!progressText.includes("walking git history…") || !progressText.includes("12/177"))
+    throw new Error(`overlay must show phase + progress: ${progressText}`);
+  sandbox.window.updateScanOverlay(null);
+  if (!el("scan-overlay").hidden) throw new Error("overlay must hide when the walk completes");
+}
+
 console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes; version chip renders; diff + seeded-layout verified");

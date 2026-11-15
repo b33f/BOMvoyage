@@ -23,6 +23,9 @@ pub struct Api {
     /// The github spec currently being served (`--repo` or the last
     /// on-demand swap), if any — the UI prepopulates its repo box from it.
     pub repo_spec: std::sync::RwLock<Option<String>>,
+    /// The background history walker's current phase (main.rs), for the
+    /// scan-progress overlay.
+    pub walk_phase: Option<Arc<std::sync::Mutex<String>>>,
 }
 
 impl Api {
@@ -177,10 +180,19 @@ impl Api {
             })
             .unwrap_or(0);
 
+        let walk = self
+            .walk_phase
+            .as_ref()
+            .and_then(|p| p.lock().ok().map(|g| g.clone()));
+        let walk_json = walk.map(|phase| {
+            let progress = crate::depsdev::progress_snapshot().map(|(d, t)| format!("{d}/{t}"));
+            serde_json::json!({ "phase": phase, "progress": progress })
+        });
         Ok(serde_json::json!({
             "name": self.current_name(),
             "repo_spec": self.repo_spec.read().ok().and_then(|g| g.clone()),
             "version": env!("CARGO_PKG_VERSION"),
+            "walk": walk_json,
             "head_sha": head_sha,
             "last_scanned_at": scanned_at,
             "scan_quality": scan_quality,

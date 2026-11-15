@@ -1416,30 +1416,46 @@ function wireCanvasControls() {
 }
 
 function pollHistoryStatus(current) {
+  updateScanOverlay(current ? null : {});
   if (current) return;
-  const badge = document.createElement("span");
-  badge.className = "badge pulse";
-  badge.textContent = "loading history — time travel soon";
-  $("meta").appendChild(badge);
   const timer = setInterval(async () => {
     try {
       const meta = await fetchJson("api/meta");
-      if (meta.detailed_packages) {
-        detailedPackages = meta.detailed_packages;
-        addVulnerablePreset();
-      }
       if (meta.history_current) {
         clearInterval(timer);
-        badge.remove();
+        updateScanOverlay(null);
         const commitPayload = await fetchJson("api/commits");
         setCommits(commitPayload.rows || []);
         refresh();
+      } else {
+        updateScanOverlay(meta.walk || {});
       }
     } catch (_) {
       // server momentarily busy — keep polling
     }
   }, 2000);
 }
+
+/// The big top-left canvas overlay while the background walk runs:
+/// "Scanning Git History …" + the walker's phase and progress
+/// (deps.dev counts when that pass is in flight). Hidden at HEAD-complete.
+function updateScanOverlay(walk) {
+  const el = $("scan-overlay");
+  if (!el) return;
+  if (!walk) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  const progress = $("scan-progress");
+  if (progress) {
+    const parts = [];
+    if (walk.phase) parts.push(walk.phase);
+    if (walk.progress) parts.push(`${walk.progress} packages fetched via deps.dev`);
+    progress.textContent = parts.join(" — ") || "this takes a moment; the graph is already usable";
+  }
+}
+
 
 // ---- calendar picker: one month at a time; days with git checkpoints
 // carry a dot, the viewed day is highlighted, any day is selectable.

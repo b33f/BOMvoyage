@@ -75,6 +75,7 @@ pub fn serve(
         db: std::sync::RwLock::new(db),
         db_path: db_path.to_path_buf(),
         repo_spec: std::sync::RwLock::new(repo_spec),
+        walk_phase: walk_phase.clone(),
         repo_name: repo_name.to_string(),
     });
     // Non-blocking accept + poll: the blocking `incoming()` iterator cannot
