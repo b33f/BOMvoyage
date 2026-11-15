@@ -355,11 +355,15 @@ fn scan_and_serve(
     }
 
     // The walker signals completion so a Ctrl+C during serving can wait,
-    // bounded, for its final batches and checkpoint to land.
+    // bounded, for its final batches and checkpoint to land — with its
+    // current phase shared for the in-place shutdown status line.
+    let walk_phase: Arc<std::sync::Mutex<String>> =
+        Arc::new(std::sync::Mutex::new("walking git history…".into()));
     let history_done = if !history_current {
         let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
         let bg_path = path.to_path_buf();
         let bg_db = Arc::clone(&db);
+        let bg_phase = Arc::clone(&walk_phase);
         std::thread::spawn(move || {
             eprintln!("background: walking git history for time travel …");
             match scan::run(
@@ -377,6 +381,7 @@ fn scan_and_serve(
                         // their detailed data now; the cache makes this pass
                         // nearly free when the flag ran before serving.
                         if detailed {
+                            *bg_phase.lock().expect("phase") = "fetching deps.dev data…".into();
                             run_detailed(&bg_db, vuln_details, false);
                         }
                         eprintln!(
@@ -411,7 +416,15 @@ fn scan_and_serve(
     }
     // The db file's path rides along: on-demand repo scans (the UI's URL
     // box) write each repo to its own sibling database file and hot-swap.
-    server::serve(listener, db, db_path, repo_spec, &repo_name, history_done)?;
+    server::serve(
+        listener,
+        db,
+        db_path,
+        repo_spec,
+        &repo_name,
+        history_done,
+        Some(walk_phase),
+    )?;
     Ok(())
 }
 

@@ -65,6 +65,9 @@ pub fn serve(
     repo_spec: Option<String>,
     repo_name: &str,
     history_done: Option<mpsc::Receiver<()>>,
+    // The background walker's current phase (set by main.rs's walker) —
+    // shown in place during the shutdown wait.
+    walk_phase: Option<Arc<std::sync::Mutex<String>>>,
 ) -> std::io::Result<()> {
     let addr = listener.local_addr()?;
     eprintln!("BOMvoyage explorer: http://127.0.0.1:{}", addr.port());
@@ -98,13 +101,51 @@ pub fn serve(
     }
     eprintln!("explorer stopped");
     if let Some(done) = history_done {
+        use std::io::IsTerminal as _;
+        use std::io::Write as _;
+        let is_tty = std::io::stderr().is_terminal();
         eprintln!("waiting up to 2 minutes for the background history walk to finish …");
-        match done.recv_timeout(Duration::from_secs(120)) {
-            Ok(()) => eprintln!("history walk finished — everything is saved"),
-            Err(_) => eprintln!(
-                "warning: the history walk is still running — progress committed so far is \
-                 saved, and the next scan completes the rest"
-            ),
+        let start = std::time::Instant::now();
+        loop {
+            match done.recv_timeout(Duration::from_millis(1000)) {
+                Ok(()) => {
+                    if is_tty {
+                        eprint!("\x1b[2K\r");
+                        let _ = std::io::stderr().flush();
+                    }
+                    eprintln!("history walk finished — everything is saved");
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    eprintln!("history walk was interrupted — progress committed so far is saved");
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // In-place liveness: elapsed seconds + the walker's
+                    // current phase. Skipped while the detailed pass owns
+                    // the line with its own progress; piped runs stay quiet.
+                    let secs = start.elapsed().as_secs();
+                    let phase = walk_phase
+                        .as_ref()
+                        .and_then(|p| p.lock().ok().map(|g| g.clone()))
+                        .unwrap_or_default();
+                    if is_tty && !phase.starts_with("fetching deps.dev") {
+                        eprint!("\x1b[2K\r  waiting for the history walk — {secs}s: {phase}   ");
+                        let _ = std::io::stderr().flush();
+                    }
+                    if start.elapsed() > Duration::from_secs(120) {
+                        if is_tty {
+                            eprint!("\x1b[2K\r");
+                            let _ = std::io::stderr().flush();
+                        }
+                        eprintln!(
+                            "warning: the history walk is still running — progress committed so far is \
+                             saved, and the next scan completes the rest"
+                        );
+                        break;
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -269,6 +310,7 @@ mod tests {
                 std::path::Path::new("shutdown-test.rl"),
                 None,
                 "shutdown-test",
+                None,
                 None,
             )
             .expect("serve returns cleanly on shutdown");
