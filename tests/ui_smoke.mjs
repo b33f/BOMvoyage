@@ -381,4 +381,68 @@ const eg = (s, t, k = "lockfile") => ({ data: { source: s, target: t, source_kin
   if (!threw) throw new Error("unknown endpoints must surface as errors");
 }
 
+
+// --- ondemand.js: classify / parseManifest / scanRepo -------------------
+{
+  const src3 = readFileSync(new URL("../src/ui/ondemand.js", import.meta.url), "utf8");
+  if (!sandbox.window.BOMVOYAGE_ONDEMAND) {
+    vm.runInContext(src3, sandbox, { filename: "ondemand.js" }); // wires the box + registers
+  }
+  const od = sandbox.window.BOMVOYAGE_ONDEMAND;
+  if (!od) throw new Error("ondemand.js must register BOMVOYAGE_ONDEMAND in static mode");
+
+  // classification mirrors the Rust filename table (+ skip dirs)
+  if (od.classify("Cargo.toml") !== "cargo-toml") throw new Error("classify cargo");
+  if (od.classify("sub/pom.xml") !== "pom") throw new Error("classify pom");
+  if (od.classify("requirements-dev.txt") !== "requirements") throw new Error("classify requirements");
+  if (od.classify("node_modules/x/package.json") !== null) throw new Error("skip dirs must apply");
+  if (od.classify("random.txt") !== null) throw new Error("non-manifests are none");
+
+  // parsers: current-only, name+version+scope+eco
+  const pj = od.parseManifest("package-json", JSON.stringify({
+    dependencies: { express: "^4.18.2" }, devDependencies: { jest: "^29" },
+  }));
+  if (pj.length !== 2 || pj[0].name !== "express" || pj[0].scope !== "direct") throw new Error("package.json parse wrong");
+  const lock = od.parseManifest("cargo-lock", "[[package]]\nname = \"libc\"\nversion = \"0.2.1\"\n\n[[package]]\nname = \"serde\"\nversion = \"1.0.1\"\n");
+  if (lock.length !== 2 || lock[0].scope !== "transitive" || lock[0].version !== "0.2.1") throw new Error("cargo.lock parse wrong");
+  const gomod = od.parseManifest("go-mod", "require (\n\tgithub.com/x/y v1.2.3\n\tgithub.com/a/b v0.1.0 // indirect\n)\n");
+  if (gomod.length !== 2 || gomod[0].scope !== "direct" || gomod[1].scope !== "transitive") throw new Error("go.mod parse wrong");
+  const req = od.parseManifest("requirements", "flask==3.0.0\n# comment\n-r other.txt\nrequests\n");
+  if (req.length !== 2 || req[0].version !== "3.0.0" || req[1].version !== "") throw new Error("requirements parse wrong");
+
+  // purls: npm scope + maven namespace
+  if (od.purlFor("npm", "@types/node", "20.1.0") !== "pkg:npm/@types/node@20.1.0") throw new Error("npm purl wrong");
+  if (od.purlFor("maven", "junit:junit", "4.12") !== "pkg:maven/junit/junit@4.12") throw new Error("maven purl wrong");
+
+  // spec validation
+  if (od.validSpec("neo4j/neo4j-java-driver") !== true) throw new Error("valid spec rejected");
+  if (od.validSpec("a/b/c") || od.validSpec("../x") || od.validSpec("a/b; x")) throw new Error("invalid spec accepted");
+
+  // scanRepo against a stubbed fetch (tree + contents + HEAD sha)
+  const treeJson = JSON.stringify({
+    tree: [
+      { type: "blob", path: "pom.xml" },
+      { type: "blob", path: "lib/package.json" },
+      { type: "blob", path: "node_modules/junk.json" },
+    ],
+    truncated: false,
+  });
+  const pomText = '<project><dependencies><dependency><groupId>junit</groupId><artifactId>junit</artifactId><version>4.12</version></dependency></dependencies></project>';
+  sandbox.fetch = async (url) => ({
+    ok: true, status: 200,
+    json: async () => (String(url).includes("/git/trees/") ? JSON.parse(treeJson)
+      : String(url).includes("/commits/HEAD") ? { sha: "deadbeef" } : Promise.reject(new Error("unexpected " + url))),
+    text: async () => (String(url).includes("pom.xml") ? pomText
+      : JSON.stringify({ dependencies: { lodash: "4.17.21" } })),
+  });
+  const result = await od.scanRepo("neo4j/neo4j-java-driver");
+  const purls = result.stages.packages.map((p) => p.purl);
+  if (!purls.includes("pkg:maven/junit/junit@4.12")) throw new Error("maven dep missing from stages");
+  if (!purls.includes("pkg:npm/lodash@4.17.21")) throw new Error("npm dep missing from stages");
+  if (!result.stages.packages.some((p) => p.eco === "generic" && p.purl.startsWith("pkg:generic/")))
+    throw new Error("root package missing");
+  if (!result.stages.declares.every((d) => d.since_date === "1970-01-01T00:00:00Z"))
+    throw new Error("current-only declares must be always-live");
+}
+
 console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes; version chip renders; diff + seeded-layout verified");

@@ -512,3 +512,14 @@ main { flex: 1; display: flex; min-height: 0; }
   font-size: 17px; line-height: 1; padding: 2px 7px; border-radius: 4px;
 }
 #update-banner button:hover { color: var(--text); background: var(--border); }
+
+/* on-demand GitHub scan box (static sites only; revealed by ondemand.js) */
+#repo-box input {
+  width: 230px; height: 28px; padding: 0 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text); font: inherit; font-size: 12.5px;
+}
+#repo-box input:focus-visible { outline: none; border-color: var(--accent); }
+#repo-box input[disabled] { opacity: 0.5; }

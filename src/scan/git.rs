@@ -34,6 +34,88 @@ fn git_child(repo: &std::path::Path, args: &[String]) -> ToolResult<std::process
         })
 }
 
+/// Validate a `org/repo` GitHub spec and derive the cache path:
+/// exactly one `/`, both segments non-empty, safe characters only, no
+/// `..` — the spec becomes a URL path and a directory name.
+pub fn validate_github_spec(spec: &str) -> ToolResult<(String, String)> {
+    let parts: Vec<&str> = spec.split('/').collect();
+    if parts.len() != 2 {
+        return Err(crate::error::ToolError::Other(format!(
+            "--repo {spec:?}: expected github org/repo (one slash)"
+        )));
+    }
+    let (org, repo) = (parts[0], parts[1]);
+    let ok = |s: &str| {
+        !s.is_empty()
+            && s != "."
+            && s != ".."
+            && !s.contains("..")
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    if !ok(org) || !ok(repo) {
+        return Err(crate::error::ToolError::Other(format!(
+            "--repo {spec:?}: org and repo may only contain letters, digits, '.', '-', '_'"
+        )));
+    }
+    Ok((org.to_string(), repo.to_string()))
+}
+
+/// Clone (or refresh a cached clone of) a GitHub repo and return the
+/// checkout path — full history (time travel needs it), via the git
+/// subprocess, cached under the shared cache dir.
+pub fn fetch_github_repo(spec: &str) -> ToolResult<std::path::PathBuf> {
+    let (org, repo) = validate_github_spec(spec)?;
+    let dir = crate::update::cache_dir()
+        .ok_or_else(|| ToolError::Other("no cache directory available (set HOME)".into()))?
+        .join("repos")
+        .join(format!("{org}_{repo}"));
+    if dir.exists() {
+        // Refresh the cached clone: fetch, re-point origin/HEAD, land the
+        // checkout hard on the remote's default branch.
+        run_simple(&dir, &["fetch".into(), "origin".into(), "--prune".into()])?;
+        run_simple(
+            &dir,
+            &[
+                "remote".into(),
+                "set-head".into(),
+                "origin".into(),
+                "--auto".into(),
+            ],
+        )?;
+        let remote_head = {
+            let out = run_simple(
+                &dir,
+                &[
+                    "symbolic-ref".into(),
+                    "--short".into(),
+                    "refs/remotes/origin/HEAD".into(),
+                ],
+            )?;
+            String::from_utf8_lossy(&out).trim().to_string() // "origin/main"
+        };
+        let branch = remote_head.trim_start_matches("origin/").to_string();
+        run_simple(
+            &dir,
+            &[
+                "checkout".into(),
+                "-B".into(),
+                branch.clone(),
+                remote_head.clone(),
+            ],
+        )?;
+        run_simple(&dir, &["reset".into(), "--hard".into(), remote_head])?;
+    } else {
+        let url = format!("https://github.com/{spec}.git");
+        std::fs::create_dir_all(dir.parent().unwrap_or(std::path::Path::new("/")))?;
+        run_simple(
+            dir.parent().unwrap_or(std::path::Path::new("/")),
+            &["clone".into(), url, dir.to_string_lossy().into()],
+        )?;
+    }
+    Ok(dir)
+}
+
 pub fn head_sha(repo: &std::path::Path) -> ToolResult<String> {
     let out = run_simple(repo, &["rev-parse".into(), "HEAD".into()])?;
     Ok(String::from_utf8_lossy(&out).trim().to_string())
@@ -445,5 +527,34 @@ mod tests {
         assert!(!valid_author_date("2024-06-01 12:00:00"));
         assert!(!valid_author_date("2024-06-01T12:00:00"));
         assert!(!valid_author_date("not a date"));
+    }
+}
+
+#[cfg(test)]
+mod github_tests {
+    use super::*;
+
+    #[test]
+    fn spec_validation() {
+        assert!(validate_github_spec("neo4j/neo4j-java-driver").is_ok());
+        assert!(validate_github_spec("b33f/BOMvoyage").is_ok());
+        assert!(validate_github_spec("org.w3/util").is_ok()); // dots fine
+                                                              // bad shapes
+        assert!(validate_github_spec("just-a-name").is_err());
+        assert!(validate_github_spec("a/b/c").is_err());
+        assert!(validate_github_spec("/repo").is_err());
+        assert!(validate_github_spec("org/").is_err());
+        assert!(validate_github_spec("").is_err());
+        // traversal and injection
+        assert!(validate_github_spec("a/../..").is_err());
+        assert!(validate_github_spec("../etc/passwd").is_err());
+        assert!(validate_github_spec("a/b; rm -rf /").is_err());
+        assert!(validate_github_spec("a/b/c/d").is_err());
+        // cache path derivation is spec-derived and safe
+        let (org, repo) = validate_github_spec("neo4j/neo4j-java-driver").unwrap();
+        assert_eq!(
+            (org.as_str(), repo.as_str()),
+            ("neo4j", "neo4j-java-driver")
+        );
     }
 }

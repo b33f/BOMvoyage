@@ -44,6 +44,12 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_update_check: bool,
 
+    /// Instead of a local folder: clone this GitHub org/repo (e.g.
+    /// neo4j/neo4j-java-driver), cache it under ~/.cache/bomvoyage/repos/,
+    /// and scan that. Works with the demo path, scan, serve and site.
+    #[arg(long, global = true, value_name = "ORG/REPO")]
+    pub repo: Option<String>,
+
     /// Detailed mode: fetch per-package data from deps.dev (homepage, repo,
     /// license, security advisories) and write it onto the graph. Slower —
     /// one API call per package version. NOTE: this contacts a third-party

@@ -33,6 +33,15 @@ fn run(cli: &Cli) -> ToolResult<()> {
     // every path (demo, scan, serve, detailed) sees the same thing.
     let detailed = cli.detailed || cli.more_detailed;
     let vuln_details = cli.vuln_details || cli.more_detailed;
+    // `--repo org/repo`: clone (or refresh) a GitHub repo into the cache
+    // and use that checkout wherever a local folder would be scanned.
+    let repo_path = match &cli.repo {
+        Some(spec) => Some(scan::git::fetch_github_repo(spec)?),
+        None => None,
+    };
+    let effective_path = |default: &Path| -> ToolResult<std::path::PathBuf> {
+        Ok(repo_path.clone().unwrap_or_else(|| default.to_path_buf()))
+    };
     match &cli.command {
         Some(Command::Update { action }) => match action {
             UpdateAction::Check => update::check_command(),
@@ -45,7 +54,7 @@ fn run(cli: &Cli) -> ToolResult<()> {
             SkillAction::List => skill::list_command(),
         },
         None => all_in_one(
-            &cli.path,
+            &effective_path(&cli.path)?,
             &cli.db,
             8334,
             5000,
@@ -61,7 +70,14 @@ fn run(cli: &Cli) -> ToolResult<()> {
         }) => {
             spawn_daily_update_check(cli.no_update_check);
             warn_vuln_details_without_detailed(detailed, vuln_details);
-            cmd_scan(path, db, *force, *max_commits, detailed, vuln_details)
+            cmd_scan(
+                &effective_path(path)?,
+                db,
+                *force,
+                *max_commits,
+                detailed,
+                vuln_details,
+            )
         }
         Some(Command::Serve {
             path,
@@ -74,7 +90,7 @@ fn run(cli: &Cli) -> ToolResult<()> {
             graph::ensure_schema(&db)?;
             warn_vuln_details_without_detailed(detailed, vuln_details);
             scan_and_serve(
-                path,
+                &effective_path(path)?,
                 db,
                 *port,
                 *open,
@@ -101,7 +117,7 @@ fn run(cli: &Cli) -> ToolResult<()> {
             spawn_daily_update_check(cli.no_update_check);
             warn_vuln_details_without_detailed(detailed, vuln_details);
             cmd_site(
-                path,
+                &effective_path(path)?,
                 db,
                 out,
                 *force,

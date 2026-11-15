@@ -1258,6 +1258,17 @@ function escapeHtml(s) {
 // ---------------------------------------------------------------- init
 
 async function init() {
+  // On-demand repos (static-site URL box) land here: fresh full layout,
+  // no stale query result, areas view (no attribution exists to group by).
+  window.BOMVOYAGE_ON_GRAPH_REBUILT = () => {
+    needsFullLayout = true;
+    queryElements = null;
+    lastCypher = null;
+    $("query-pill").hidden = true;
+    pausePlay();
+    setView("areas");
+    refresh();
+  };
   const meta = await fetchJson("api/meta");
   detailedPackages = meta.detailed_packages || 0;
   const badges = (meta.ecosystems || [])

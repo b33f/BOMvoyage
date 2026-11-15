@@ -25,6 +25,9 @@ pub const CYTOSCAPE_JS: &[u8] = include_bytes!("../ui/vendor/cytoscape.min.js");
 /// unused by this server's routes but embedded so the site exporter and
 /// the parse/wiring tests share one source of truth.
 pub const WASM_BACKEND_JS: &str = include_str!("../ui/wasm-backend.js");
+/// On-demand GitHub scan for static sites (only meaningful with
+/// WASM_BACKEND_JS; embedded for the same single-source reason).
+pub const ONDEMAND_JS: &str = include_str!("../ui/ondemand.js");
 
 /// Set by the first Ctrl+C; the serve loop polls it between accepts.
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);

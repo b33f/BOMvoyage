@@ -373,5 +373,14 @@ window.BOMVOYAGE_STATIC = (function () {
 
   boot();
 
-  return { fetchJson, ready };
+  return { fetchJson, ready, replayStages };
+
+  /// Swap the instance for an on-demand scan (ondemand.js): reset the db
+  /// and replay the given stages, then resolve when serving resumes.
+  async function replayStages(stages) {
+    await ready; // initial snapshot replay must be done before a swap
+    if (!db) throw new Error("graph engine not loaded");
+    db.reset();
+    await replaySnapshot({ stages });
+  }
 })();

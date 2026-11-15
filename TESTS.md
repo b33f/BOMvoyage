@@ -11,7 +11,7 @@ Run everything locally with:
 $ cargo test
 ```
 
-The suite is 76 tests: 72 unit tests in the library plus four end-to-end
+The suite is 77 tests: 73 unit tests in the library plus four end-to-end
 integration tests (`tests/integration.rs`) that build a real git repository
 commit by commit and run the full scan → graph → temporal-query pipeline.
 
@@ -59,6 +59,7 @@ commit by commit and run the full scan → graph → temporal-query pipeline.
 | Test | What it tests |
 |---|---|
 | `utc_normalization_handles_offsets` | Commit timestamps with non-UTC offsets normalize to UTC instants (string-comparable dates) |
+| `spec_validation` | `--repo org/repo` validation: exactly one slash, safe characters, `..`/traversal/injection rejected; cache-path derivation |
 | `date_shape_rejects_loose_spellings` | Only strict ISO date/datetime shapes are accepted; loose spellings are errors, never guesses |
 | `replay_derives_intervals` | History replay derives `{since, removed}` occupancy intervals on `DECLARES` edges — who added what, every bump |
 | `replay_handles_deleted_manifest` | A manifest deleted in a commit closes its intervals (dependency removal is recorded, not lost) |
@@ -90,7 +91,7 @@ commit by commit and run the full scan → graph → temporal-query pipeline.
 | `embedded_ui_scripts_parse` | Every embedded UI script (`app.js`, `search.js`) parses under `node --check` — the hand-rolled JS has no build step, so a syntax error ships silently and blanks the explorer (skipped where `node` is absent; CI always has it, plus an explicit lint-job gate) |
 | `index_references_only_embedded_assets` | `index.html` references only scripts/styles the server actually embeds and routes |
 | `serve_shuts_down_on_flag` | The serve accept loop observes the shutdown flag and returns promptly — what makes Ctrl+C a clean stop (stop accepting → wait for the history walk) instead of a default signal kill; no signals in the test, the flag is set directly |
-| `embedded_ui_wiring_smoke` | Behavior of the real `app.js` run in node (`tests/ui_smoke.mjs`, stubbed DOM + fetch, offline, two worlds): on a detailed graph `init()` executes end-to-end and the "Vulnerable deps + who added them" preset appears **exactly once** (splicing it into the preset array *and* button-injecting it once duplicated it); packages render green (`#3fb950`) in **every** mode, with red triangles marking vulnerable ones; the version chip renders `v1.2.3` from `/api/meta`; `diffElements` (identity-preserving graph diff) and the seeded-vs-first-render layout options are pinned by fixture, including the 900ms base animation and the 4× toggle dividing it by four |
+| `embedded_ui_wiring_smoke` | Behavior of the real `app.js` run in node (`tests/ui_smoke.mjs`, stubbed DOM + fetch, offline, two worlds): on a detailed graph `init()` executes end-to-end and the "Vulnerable deps + who added them" preset appears **exactly once** (splicing it into the preset array *and* button-injecting it once duplicated it); packages render green (`#3fb950`) in **every** mode, with red triangles marking vulnerable ones; the version chip renders `v1.2.3` from `/api/meta`; `diffElements` (identity-preserving graph diff) and the seeded-vs-first-render layout options are pinned by fixture, including the 900ms base animation and the 4× toggle dividing it by four; the static backend's endpoint contracts are pinned against a stubbed engine; the on-demand GitHub scan's classifier, parsers (package.json/Cargo.toml/Cargo.lock/go.mod/requirements), purl building and spec validation are unit-pinned |
 
 ## Self-update (`src/update.rs`)
 
