@@ -213,28 +213,14 @@ const eg = (s, t, k = "lockfile") => ({ data: { source: s, target: t, source_kin
     throw new Error("edge identity must include source_kind");
 }
 
-// --- layoutOptions: seeded vs first-render ------------------------------
+// --- layoutOptions: seeded (drift) vs first-render ----------------------
 {
   const seeded = sandbox.layoutOptions(10, true);
-  if (seeded.randomize !== false || seeded.animate === false)
-    throw new Error(`seeded layout must not randomize and must animate: ${JSON.stringify(seeded)}`);
-  if (seeded.animationDuration !== 900)
-    throw new Error(`base animation is 900ms (half of the previous 450ms), got ${seeded.animationDuration}`);
+  if (seeded.randomize !== false || seeded.animate !== false)
+    throw new Error(`seeded layout must be silent + seeded (drift is manual): ${JSON.stringify(seeded)}`);
   const fresh = sandbox.layoutOptions(10);
   if (fresh.randomize !== true || fresh.animate !== false)
     throw new Error(`first-render layout must randomize, unanimated: ${JSON.stringify(fresh)}`);
-}
-// 4× toggle divides the animation duration by four
-{
-  sandbox.toggleRate();
-  const fast = sandbox.layoutOptions(10, true);
-  if (fast.animationDuration !== 225)
-    throw new Error(`4× must divide the animation duration by four, got ${fast.animationDuration}`);
-  if (!sandbox.document.getElementById("rate-btn").className.includes("active"))
-    throw new Error("rate button must be flagged active at 4×");
-  sandbox.toggleRate();
-  if (sandbox.layoutOptions(10, true).animationDuration !== 900)
-    throw new Error("toggling 4× off must restore the 900ms base");
 }
 
 // version-bump detection: the purl base (everything before the version)
@@ -251,6 +237,46 @@ const eg = (s, t, k = "lockfile") => ({ data: { source: s, target: t, source_kin
     const got = sandbox.baseOf(id);
     if (got !== want) throw new Error(`baseOf(${id}) = ${got}, want ${want}`);
   }
+}
+
+// 4× toggle flips the button state (duration scaling is covered by the
+// browser checks — the drift math needs a live canvas)
+{
+  sandbox.toggleRate();
+  if (!sandbox.document.getElementById("rate-btn").className.includes("active"))
+    throw new Error("rate button must be flagged active at 4×");
+  sandbox.toggleRate();
+  if (sandbox.document.getElementById("rate-btn").className.includes("active"))
+    throw new Error("rate button must not be active at 1×");
+}
+
+// --- relaxTargets: the drift-target relaxation --------------------------
+{
+  // an edge spanning 600px relaxes toward the IDEAL length (70px) — from
+  // BOTH ends, and the midpoint stays put (symmetric)
+  const out = sandbox.relaxTargets(
+    [
+      { id: "a", x: -300, y: 0 },
+      { id: "b", x: 300, y: 0 },
+    ],
+    [{ source: "a", target: "b" }],
+    150
+  );
+  const d = Math.hypot(out.get("a").x - out.get("b").x, out.get("a").y - out.get("b").y);
+  if (d > 300 || d < 20) throw new Error(`relaxation should pull the pair toward its ideal length, got ${Math.round(d)}px`);
+  const mid = (out.get("a").x + out.get("b").x) / 2;
+  if (Math.abs(mid) > 60) throw new Error(`symmetric pair must stay centered, midpoint ${Math.round(mid)}`);
+  // locked nodes never move
+  const out2 = sandbox.relaxTargets(
+    [
+      { id: "a", x: -300, y: 0, locked: true },
+      { id: "b", x: 300, y: 0 },
+    ],
+    [{ source: "a", target: "b" }],
+    150
+  );
+  if (out2.get("a").x !== -300 || out2.get("a").y !== 0)
+    throw new Error("locked anchor must not move");
 }
 
 console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes; version chip renders; diff + seeded-layout verified");

@@ -29,6 +29,8 @@ const ARRIVAL_PINK = "#ff7bac";
 const ANIM_MS = 900;
 let playbackRate = 1;        // 1 or 4 (the 4× toggle)
 let runningLayout = null;    // layout whose animation is in flight (stoppable on pause)
+let driftPending = false;    // a scratch drift computation is in flight (the sweep waits for it)
+let motionGen = 0;           // bumped on pause: drift computed before a pause snaps instead of animating
 
 /// Node kinds a query can return, with their canvas look. Package nodes are
 /// coloured by ecosystem instead.
@@ -288,11 +290,10 @@ const CY_STYLE = [
 ];
 
 /// Hub-and-spoke results (one developer → 200 packages) knot up under a
-/// force layout; rings by degree read far better.
-///
-/// `seeded` (incremental updates): start from the nodes' current positions
-/// instead of randomizing — a day-two graph resembles day one, so persisting
-/// nodes barely move and the layout's motion plays as a smooth animation.
+/// force layout; rings by degree read far better. `seeded` (incremental
+/// updates) starts from the nodes' current positions — the layout computes
+/// the day's ideal arrangement silently and the drift logic (MAX_DRIFT)
+/// migrates nodes toward it gradually, so nothing ever jumps.
 function layoutOptions(n, seeded) {
   if (cy && n > 40) {
     const maxDeg = cy.nodes().max((x) => x.degree()).value;
@@ -310,8 +311,7 @@ function layoutOptions(n, seeded) {
       });
       return {
         name: "concentric",
-        animate: !!seeded,
-        animationDuration: ANIM_MS / playbackRate,
+        animate: false,
         concentric: (x) => (ring.has(x.id()) ? -ring.get(x.id()) : 1),
         levelWidth: () => 1,
         minNodeSpacing: 22,
@@ -321,10 +321,7 @@ function layoutOptions(n, seeded) {
   }
   return {
     name: "cose",
-    // Seeded ("end"): the layout computes against current positions, then
-    // nodes interpolate to their new spots — a glide, not a hop.
-    animate: seeded ? "end" : false,
-    animationDuration: ANIM_MS / playbackRate,
+    animate: false,
     randomize: !seeded,
     nodeRepulsion: () => (n > 150 ? 9000 : 6000),
     idealEdgeLength: () => (n > 150 ? 50 : 70),
@@ -338,9 +335,8 @@ function layoutOptions(n, seeded) {
 /// that star-of-stars into a hairball. Hubs go evenly on a big ring (like
 /// the devs view), each hub's packages fan on a circle around it sized so
 /// neighbouring fans never touch. Returns false when there are no hubs.
-/// With `animate`, persisting nodes glide to their new spot (a hub gaining
-/// a package re-spreads its fan as a smooth opening) and brand-new nodes
-/// are placed instantly.
+/// With `animate`, nodes drift toward their slot (clamped to MAX_DRIFT —
+/// the arrangement migrates over days instead of jumping).
 function applyAreasLayout(animate) {
   const hubs = cy.nodes("[type = 'area']");
   if (hubs.length === 0) return false;
@@ -355,28 +351,18 @@ function applyAreasLayout(animate) {
   });
   // Ring circumference sized so adjacent fans stay pr_i + pr_j + gap apart.
   const R = Math.max(170, (fans.reduce((s, f) => s + 2 * f.pr, 0) / tau) * 1.35);
-  const place = (node, x, y) => {
-    if (node.locked()) return; // pinned: persisting nodes never move
-    if (animate && node.animate) {
-      node.animate(
-        { position: { x, y } },
-        { duration: ANIM_MS / playbackRate, easing: "ease-in-out" }
-      );
-    } else {
-      node.position({ x, y });
-    }
-  };
+  const ms = animate ? ANIM_MS / playbackRate : 0;
   let angle = -Math.PI / 2;
   fans.forEach((f, i) => {
     const mid = angle + f.pr / R; // centre of this hub's angular slice
     angle += (2 * f.pr) / R;
     const hx = R * Math.cos(mid);
     const hy = R * Math.sin(mid);
-    place(f.hub, hx, hy);
+    driftToward(f.hub, hx, hy, ms);
     const spin = i * 2.4; // stagger fans so neighbours don't line up
     f.kids.forEach((p, j) => {
       const pa = mid + spin + (j / Math.max(f.kids.length, 1)) * tau;
-      place(p, hx + f.pr * Math.cos(pa), hy + f.pr * Math.sin(pa));
+      driftToward(p, hx + f.pr * Math.cos(pa), hy + f.pr * Math.sin(pa), ms);
     });
   });
   return true;
@@ -539,6 +525,149 @@ function arriveWithFlourish(ele, data, isUpgrade) {
   }, fadeMs + 100);
 }
 
+// ------------------------------------------------------- gradual drift
+
+// Position animations we've started (via ele.animation — the only stop()
+// that actually works; eles.stop() is a silent no-op on playing motion).
+const liveAnimations = new Set();
+
+function animatePos(ele, to, ms) {
+  if (ms <= 0) {
+    ele.position(to);
+    return;
+  }
+  const anim = ele.animation({ position: to }, { duration: ms, easing: "ease-in-out" });
+  liveAnimations.add(anim);
+  anim.play();
+  setTimeout(() => liveAnimations.delete(anim), ms + 120);
+}
+
+/// Freeze every in-flight position motion exactly where it is — pause.
+function freezeMotions() {
+  for (const anim of liveAnimations) {
+    try {
+      anim.stop();
+    } catch (_) {
+      // already finished
+    }
+  }
+  liveAnimations.clear();
+}
+
+/// How far any existing node may move per timeline step (model px): the
+/// layout computes the day's ideal arrangement, but existing nodes crawl
+/// toward it over several days instead of jumping. Small changes settle
+/// in a day; big reshuffles unfold over a week of days.
+const MAX_DRIFT = 80;
+
+/// Move `node` up to MAX_DRIFT toward (tx, ty), animating when ms > 0.
+/// Locked nodes (version-bump pins) don't move.
+function driftToward(node, tx, ty, ms) {
+  if (node.locked()) return;
+  const p = node.position();
+  const dx = tx - p.x, dy = ty - p.y;
+  const d = Math.hypot(dx, dy);
+  const s = d > MAX_DRIFT ? MAX_DRIFT / d : 1;
+  animatePos(node, { x: p.x + dx * s, y: p.y + dy * s }, ms);
+}
+
+/// Compute a day's target arrangement: a tiny deterministic Fruchterman–
+/// Reingold-style relaxation run on the day's element arrays (no rendering,
+/// no instance). Unlike cose — whose equilibrium ignores the seed — this
+/// genuinely relaxes FROM the current positions, which is what makes
+/// gradual drift possible: each day's target is near where the graph
+/// already is. Locked nodes act as anchors. Resolves a Map of id → {x, y}.
+function computeDriftTargets(nodeEls, edgeEls) {
+  try {
+    const nodes = nodeEls.map((n) => ({
+      id: n.data.id,
+      x: n.position.x,
+      y: n.position.y,
+      locked: !!n.locked,
+    }));
+    const edges = edgeEls.map((e) => ({ source: e.data.source, target: e.data.target }));
+    return Promise.resolve(relaxTargets(nodes, edges, 150));
+  } catch (e) {
+    return Promise.resolve(new Map());
+  }
+}
+
+/// The relaxation itself (pure, testable): repulsion on all pairs, springs
+/// on edges pulling toward IDEAL length, damped velocity-capped integration
+/// from the input positions.
+function relaxTargets(nodes, edges, iterations) {
+  const n = nodes.length;
+  const idx = new Map(nodes.map((v, i) => [v.id, i]));
+  const px = nodes.map((v) => v.x);
+  const py = nodes.map((v) => v.y);
+  const vx = new Float64Array(n);
+  const vy = new Float64Array(n);
+  const locked = nodes.map((v) => !!v.locked);
+  const eix = [];
+  for (const e of edges) {
+    const a = idx.get(e.source), b = idx.get(e.target);
+    if (a !== undefined && b !== undefined && a !== b) eix.push([a, b]);
+  }
+  const REPULSION = 9000;
+  const SPRING = 0.02;
+  const IDEAL = 70;
+  const DAMPING = 0.72;
+  const MAX_STEP = 6;
+  for (let it = 0; it < iterations; it++) {
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        let dx = px[j] - px[i], dy = py[j] - py[i];
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 1) {
+          // deterministic jitter for exact overlaps (no Math.random: the
+          // same graph must relax the same way every run)
+          dx = ((i * 31 + j * 17) % 11 - 5) * 0.1 || 0.5;
+          dy = ((i * 13 + j * 29) % 11 - 5) * 0.1 || 0.5;
+          d2 = dx * dx + dy * dy;
+        }
+        const d = Math.sqrt(d2);
+        const f = REPULSION / d2 / d; // force / distance → multiply by unit components
+        const fx = dx * f, fy = dy * f;
+        if (!locked[i]) { vx[i] -= fx; vy[i] -= fy; }
+        if (!locked[j]) { vx[j] += fx; vy[j] += fy; }
+      }
+    }
+    for (const [a, b] of eix) {
+      const dx = px[b] - px[a], dy = py[b] - py[a];
+      const d = Math.max(Math.hypot(dx, dy), 1);
+      const f = (d - IDEAL) * SPRING;
+      const fx = (dx / d) * f, fy = (dy / d) * f;
+      if (!locked[a]) { vx[a] += fx; vy[a] += fy; }
+      if (!locked[b]) { vx[b] -= fx; vy[b] -= fy; }
+    }
+    for (let i = 0; i < n; i++) {
+      if (locked[i]) continue;
+      vx[i] *= DAMPING; vy[i] *= DAMPING;
+      const v = Math.hypot(vx[i], vy[i]);
+      if (v > MAX_STEP) { vx[i] *= MAX_STEP / v; vy[i] *= MAX_STEP / v; }
+      px[i] += vx[i]; py[i] += vy[i];
+    }
+  }
+  return new Map(nodes.map((v, i) => [v.id, { x: px[i], y: py[i] }]));
+}
+
+/// Move `ele` from `from` toward `tgt`, clamped to MAX_DRIFT, over `ms`
+/// (ms <= 0 → snap instantly, used when the motion begins after a pause).
+function glideClamped(ele, from, tgt, ms) {
+  if (!ele.inside() || ele.locked()) return;
+  const dx = tgt.x - from.x, dy = tgt.y - from.y;
+  const d = Math.hypot(dx, dy);
+  const s = d > MAX_DRIFT ? MAX_DRIFT / d : 1;
+  animatePos(ele, { x: from.x + dx * s, y: from.y + dy * s }, ms);
+}
+
+/// A fresh arrival: wind back to its spawn point and glide to its slot
+/// (unclamped — new nodes may travel freely).
+function glideBack(ele, from, tgt, ms) {
+  if (!ele.inside() || ele.locked()) return;
+  animatePos(ele, tgt, ms);
+}
+
 function rebuildGraph(elements) {
   if (!cy) {
     cy = cytoscape({
@@ -561,11 +690,13 @@ function rebuildGraph(elements) {
   const isQuery = !!queryElements;
   const full = needsFullLayout || isQuery || lastRenderWasQuery;
   let changed = true;
-  // Nodes pinned while the incremental layout runs: persisting nodes (time
-  // travel never moves an existing node) and version-bump replacements
-  // (pinned on the replaced version's spot). Released on layoutstop or a
-  // timeout failsafe.
-  const heldNodes = [];
+  // Nodes pinned while the incremental layout runs — version-bump
+  // replacements only (pinned on the replaced version's spot). Released on
+  // layoutstop or a timeout failsafe.
+  const heldReplacements = [];
+  // Day-start positions / spawn points driving the gradual drift.
+  const prePersisting = []; // {ele, from}
+  const spawnFrom = [];     // {ele, from}
 
   // Dense canvases only label nodes once you zoom in — but the dependencies
   // view is hand-placed and spread out, so it always labels.
@@ -589,17 +720,16 @@ function rebuildGraph(elements) {
     const nextData = new Map(elements.nodes.map((n) => [n.data.id, n.data]));
     cy.batch(() => {
       if (changed) {
-        // Freeze the existing graph: every persisting node is locked so the
-        // incremental layout positions ONLY the new arrivals, around the
-        // untouched day-(N-1) arrangement. A green node that exists on both
-        // days therefore cannot jump — this is the whole point of the
-        // incremental path.
+        // Data refresh plus day-start position capture for the drift: the
+        // layout's target arrangement is computed silently, then every
+        // existing node moves at most MAX_DRIFT toward it — the arrangement
+        // migrates gradually over days instead of jumping or freezing.
         for (const id of diff.keptNodeIds) {
           const n = cy.getElementById(id);
           if (n.nonempty()) {
             n.data(nextData.get(id));
-            n.lock();
-            heldNodes.push(n);
+            const p = n.position();
+            prePersisting.push({ ele: n, from: { x: p.x, y: p.y } });
           }
         }
         // A version bump is a new purl (a Package node IS name+version):
@@ -623,9 +753,11 @@ function rebuildGraph(elements) {
           const pos = replacement || spawnPosition(n.data.id, elements);
           const ele = cy.add({ data: Object.assign({}, n.data), position: pos });
           arriveWithFlourish(ele, n.data, replacement !== undefined);
+          const p = ele.position();
+          spawnFrom.push({ ele, from: { x: p.x, y: p.y } });
           if (replacement) {
             ele.lock();
-            heldNodes.push(ele);
+            heldReplacements.push(ele);
           }
         }
         for (const e of diff.addedEdges) {
@@ -647,21 +779,69 @@ function rebuildGraph(elements) {
   // An unchanged element set means nothing moved: no layout, no fit — the
   // graph is perfectly stable between days that differ in nothing.
   if (changed) {
-    if (!(handPlaced && applyAreasLayout(!full))) {
-      runningLayout = cy.layout(layoutOptions(elements.nodes.length, !full)).run();
+    const animMs = ANIM_MS / playbackRate;
+    const gen = motionGen; // pause bumps this: drift computed before a pause snaps instead of animating
+    if (handPlaced && applyAreasLayout(true)) {
+      // The areas layout drifted every node toward its slot (clamped) —
+      // replacements stay pinned on their replaced version's spot.
+      for (const e of heldReplacements) if (e.inside()) e.unlock();
+      heldReplacements.length = 0;
+      fitReasonably();
+    } else if (full) {
+      // Fresh arrangement (first render, view flip, query result, glitch
+      // recovery): the classic random layout, on the canvas.
+      runningLayout = cy.layout(layoutOptions(elements.nodes.length, false)).run();
       runningLayout.on("layoutstop", () => {
         runningLayout = null;
-        for (const e of heldNodes) if (e.inside()) e.unlock();
-        heldNodes.length = 0;
+        for (const e of heldReplacements) if (e.inside()) e.unlock();
+        heldReplacements.length = 0;
       });
+      fitReasonably();
+    } else {
+      // Compute the day's target arrangement on a HEADLESS scratch instance
+      // (cose seeded from the current arrangement): nothing moves on screen
+      // while it thinks. Then migrate the real canvas — persisting nodes
+      // glide one MAX_DRIFT step toward their target, arrivals glide in
+      // from their spawn point, replacements unlock on their version's spot.
+      driftPending = true;
+      computeDriftTargets(
+        cy.nodes().map((n) => ({
+          data: Object.assign({}, n.data()),
+          position: { x: n.position().x, y: n.position().y },
+          locked: n.locked(),
+        })),
+        cy.edges().map((e) => ({ data: Object.assign({}, e.data()) }))
+      ).then((targets) => {
+        driftPending = false;
+        if (gen !== motionGen) {
+          // paused while the drift was computing: freeze the frame as it
+          // stands — discard the targets entirely rather than snapping
+          for (const e of heldReplacements) if (e.inside()) e.unlock();
+          heldReplacements.length = 0;
+          return;
+        }
+        cy.batch(() => {
+          for (const d of prePersisting) {
+            const tgt = targets.get(d.ele.id());
+            if (tgt) glideClamped(d.ele, d.from, tgt, animMs);
+          }
+          for (const d of spawnFrom) {
+            const tgt = targets.get(d.ele.id());
+            if (tgt) glideBack(d.ele, d.from, tgt, animMs);
+          }
+        });
+        for (const e of heldReplacements) if (e.inside()) e.unlock();
+        heldReplacements.length = 0;
+      });
+      // Failsafe: never leave a replacement node locked if the scratch
+      // layout stalls.
+      setTimeout(() => {
+        driftPending = false;
+        for (const e of heldReplacements) if (e.inside()) e.unlock();
+        heldReplacements.length = 0;
+      }, (ANIM_MS * 4) / playbackRate + 1500);
+      fitReasonably();
     }
-    // Failsafe: never leave a node locked if the layoutstop event is slow
-    // or the areas layout path skipped it.
-    setTimeout(() => {
-      for (const e of heldNodes) if (e.inside()) e.unlock();
-      heldNodes.length = 0;
-    }, (ANIM_MS * 2) / playbackRate + 500);
-    fitReasonably();
   }
   renderLegend();
   const empty = $("empty-state");
@@ -1251,12 +1431,17 @@ function pausePlay() {
   playTimer = null;
   // Freeze the frame: in-flight graph motion from the last rendered day
   // snaps to its end state now — a paused sweep must not keep animating
-  // in the background.
+  // in the background. Bumping motionGen makes any drift computation that
+  // is still in flight apply as a snap instead of starting new motion;
+  // bumping renderSeq discards a sweep refresh that is still mid-fetch,
+  // so a day whose render hadn't landed yet never lands after the pause.
+  motionGen++;
+  renderSeq++;
   if (runningLayout) {
     runningLayout.stop();
     runningLayout = null;
   }
-  if (cy) cy.elements().stop(true, true);
+  freezeMotions();
   updatePlayButtons();
 }
 
@@ -1327,6 +1512,7 @@ function animationsSettled() {
     const poll = () => {
       if (!playing || !cy) return resolve();
       const moving =
+        driftPending ||
         runningLayout !== null ||
         cy
           .nodes()
