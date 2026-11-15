@@ -353,7 +353,11 @@ fn fetch_version_info(
 
 /// Fetch every target with bounded concurrency and a global pace. Results
 /// come back index-aligned with `targets`. Never panics on network trouble.
+/// Prints in-place progress on a TTY (`\r`-updated single line, never
+/// scrolling); piped stderr stays quiet until the summary.
 fn fetch_versions(targets: &[DetailedTarget], refresh: bool) -> Vec<Result<Fetched, String>> {
+    use std::io::IsTerminal as _;
+    use std::io::Write as _;
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .build();
@@ -362,7 +366,38 @@ fn fetch_versions(targets: &[DetailedTarget], refresh: bool) -> Vec<Result<Fetch
     let results: Mutex<Vec<(usize, Result<Fetched, String>)>> =
         Mutex::new(Vec::with_capacity(targets.len()));
     let pacer = Pacer::new();
+    let total = targets.len();
+    let done = AtomicUsize::new(0);
+    let fetched = AtomicUsize::new(0);
+    let cached = AtomicUsize::new(0);
+    let not_found = AtomicUsize::new(0);
+    let failed = AtomicUsize::new(0);
+    let is_tty = std::io::stderr().is_terminal();
     std::thread::scope(|s| {
+        // In-place progress line: the fetch can take minutes; without this
+        // it looks hung. Never printed when stderr is piped.
+        s.spawn(|| {
+            let mut seen = 0;
+            while done.load(Ordering::Relaxed) < total {
+                std::thread::sleep(Duration::from_millis(400));
+                let d = done.load(Ordering::Relaxed);
+                if is_tty && d != seen {
+                    seen = d;
+                    eprint!(
+                        "\x1b[2K\r  detailed: {d}/{total} — {} fetched, {} cached, {} without data, {} failed",
+                        fetched.load(Ordering::Relaxed),
+                        cached.load(Ordering::Relaxed),
+                        not_found.load(Ordering::Relaxed),
+                        failed.load(Ordering::Relaxed),
+                    );
+                    let _ = std::io::stderr().flush();
+                }
+            }
+            if is_tty {
+                eprint!("\x1b[2K\r");
+                let _ = std::io::stderr().flush();
+            }
+        });
         for _ in 0..WORKERS.min(targets.len().max(1)) {
             s.spawn(|| loop {
                 let i = next.fetch_add(1, Ordering::SeqCst);
@@ -371,6 +406,21 @@ fn fetch_versions(targets: &[DetailedTarget], refresh: bool) -> Vec<Result<Fetch
                 }
                 pacer.wait();
                 let r = fetch_version_info(&agent, dir.as_deref(), &targets[i], refresh);
+                match &r {
+                    Ok(Fetched::Fresh(Some(_))) => {
+                        fetched.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(Fetched::Cached(Some(_))) => {
+                        cached.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(_) => {
+                        not_found.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(_) => {
+                        failed.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                done.fetch_add(1, Ordering::SeqCst);
                 if let Ok(mut guard) = results.lock() {
                     guard.push((i, r));
                 }
@@ -558,6 +608,10 @@ fn apply_osv_details(rows: &mut [Row], refresh: bool) -> usize {
     if ids.is_empty() {
         return 0;
     }
+    eprintln!(
+        "detailed mode: fetching details for {} distinct advisories via OSV …",
+        ids.len()
+    );
 
     let details = fetch_osv_details(&ids, refresh);
     let detailed = details

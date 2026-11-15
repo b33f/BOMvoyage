@@ -16,37 +16,6 @@ use bomvoyage::error::{ToolError, ToolResult};
 use bomvoyage::graph::SbomGraph;
 use bomvoyage::{depsdev, export, graph, scan, server, skill, update};
 
-#[cfg(test)]
-mod port_tests {
-    use super::*;
-
-    #[test]
-    fn finds_own_listening_socket() {
-        // bind an ephemeral port, then find ourselves holding it
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
-        let port = listener.local_addr().expect("addr").port();
-        let holder = find_port_holder(port).expect("the listener must be found");
-        assert_eq!(holder.pid, std::process::id());
-        assert!(!holder.path.is_empty(), "a path/command is always reported");
-        drop(listener);
-        assert!(
-            find_port_holder(port).is_none(),
-            "released port has no holder"
-        );
-    }
-
-    #[test]
-    fn unbound_port_has_no_holder() {
-        // an ephemeral port we never bind: extremely likely to be free
-        let free = {
-            let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
-            l.local_addr().expect("addr").port()
-        };
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        assert!(find_port_holder(free).is_none());
-    }
-}
-
 fn main() {
     let cli = Cli::parse();
     let code = match run(&cli) {
@@ -199,31 +168,29 @@ fn find_port_holder(port: u16) -> Option<PortHolder> {
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
-    for line in text.lines().skip(1) {
-        // columns: COMMAND PID USER ... — COMMAND may be a full path
-        let mut cols = line.split_whitespace();
-        let command = cols.next()?;
-        let pid = cols.next()?.parse::<u32>().ok()?;
-        let path = if command.contains('/') {
-            command.to_string()
-        } else {
-            // bare command name: resolve to the full invocation via ps
-            std::process::Command::new("ps")
-                .args(["-p", &pid.to_string(), "-o", "args="])
-                .output()
-                .ok()
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .map(|s| {
-                    s.chars()
-                        .map(|c| if c.is_control() { ' ' } else { c })
-                        .collect::<String>()
-                })
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| command.to_string())
-        };
-        return Some(PortHolder { pid, path });
-    }
-    None
+    // First data line (columns: COMMAND PID USER …) is the holder; COMMAND
+    // may be a bare name — resolve the full invocation via ps.
+    let line = text.lines().nth(1)?;
+    let mut cols = line.split_whitespace();
+    let command = cols.next()?;
+    let pid = cols.next()?.parse::<u32>().ok()?;
+    let path = if command.contains('/') {
+        command.to_string()
+    } else {
+        std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "args="])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .map(|s| {
+                s.chars()
+                    .map(|c| if c.is_control() { ' ' } else { c })
+                    .collect::<String>()
+            })
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| command.to_string())
+    };
+    Some(PortHolder { pid, path })
 }
 
 /// Bind the serve port, or fail fast — and when the port is held, show the
@@ -643,5 +610,36 @@ fn open_read_only_or_ephemeral(db: &Path) -> ToolResult<SbomGraph> {
             Ok(SbomGraph { db: d })
         }
         Err(e) => Err(e),
+    }
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+
+    #[test]
+    fn finds_own_listening_socket() {
+        // bind an ephemeral port, then find ourselves holding it
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let holder = find_port_holder(port).expect("the listener must be found");
+        assert_eq!(holder.pid, std::process::id());
+        assert!(!holder.path.is_empty(), "a path/command is always reported");
+        drop(listener);
+        assert!(
+            find_port_holder(port).is_none(),
+            "released port has no holder"
+        );
+    }
+
+    #[test]
+    fn unbound_port_has_no_holder() {
+        // an ephemeral port we never bind: extremely likely to be free
+        let free = {
+            let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+            l.local_addr().expect("addr").port()
+        };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(find_port_holder(free).is_none());
     }
 }
