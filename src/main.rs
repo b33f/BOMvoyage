@@ -632,6 +632,17 @@ mod port_tests {
 
     #[test]
     fn finds_own_listening_socket() {
+        // lsof is the finder's tool — absent on Windows (and minimal Linux
+        // images), where the finder legitimately returns None and the
+        // busy-port error stays generic. Skip there.
+        if std::process::Command::new("lsof")
+            .arg("-v")
+            .output()
+            .is_err()
+        {
+            eprintln!("lsof not available — skipping port-holder test");
+            return;
+        }
         // bind an ephemeral port, then find ourselves holding it
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
         let port = listener.local_addr().expect("addr").port();
