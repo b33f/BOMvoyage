@@ -11,7 +11,7 @@ Run everything locally with:
 $ cargo test
 ```
 
-The suite is 78 tests: 74 unit tests in the library plus four end-to-end
+The suite is 80 tests: 76 unit tests in the library and binary plus four end-to-end
 integration tests (`tests/integration.rs`) that build a real git repository
 commit by commit and run the full scan → graph → temporal-query pipeline.
 
@@ -106,6 +106,16 @@ commit by commit and run the full scan → graph → temporal-query pipeline.
 | `sha256_known_vector` | SHA-256 known-answer test (empty digest) |
 | `daily_check_freshness_window` | The once-a-day cache: fresh inside 24h, stale at exactly 24h, safe against a backwards clock |
 | `state_roundtrip_and_optout` | The update-check state file writes and reads back; opt-out works via `BOMVOYAGE_NO_UPDATE_CHECK` and `--no-update-check` (flag wins) |
+
+## Port takeover (`src/main.rs` + port tests)
+
+| Test | What it tests |
+|---|---|
+| `finds_own_listening_socket` | The busy-port finder: a bound ephemeral port yields its holder (this process's pid, a non-empty executable path); a released port has no holder |
+| `unbound_port_has_no_holder` | An unbound port reports no holder |
+
+(The interactive kill-prompt flow — prompt, kill, port takeover — is
+verified manually through a pty; signal/TTY behavior is not CI-portable.)
 
 ## Agent skill (`src/skill.rs`)
 
