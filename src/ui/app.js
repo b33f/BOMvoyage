@@ -609,6 +609,8 @@ function relaxTargets(nodes, edges, iterations) {
     if (a !== undefined && b !== undefined && a !== b) eix.push([a, b]);
   }
   const REPULSION = 9000;
+  const REPULSION_CUTOFF = 320; // px — distant clusters don't push each other apart
+  const GRAVITY = 0.02;         // weak pull toward the origin keeps the arrangement centered
   const SPRING = 0.02;
   const IDEAL = 70;
   const DAMPING = 0.72;
@@ -626,11 +628,19 @@ function relaxTargets(nodes, edges, iterations) {
           d2 = dx * dx + dy * dy;
         }
         const d = Math.sqrt(d2);
+        if (d > REPULSION_CUTOFF) continue; // far clusters ignore each other
         const f = REPULSION / d2 / d; // force / distance → multiply by unit components
         const fx = dx * f, fy = dy * f;
         if (!locked[i]) { vx[i] -= fx; vy[i] -= fy; }
         if (!locked[j]) { vx[j] += fx; vy[j] += fy; }
       }
+    }
+    for (let i = 0; i < n; i++) {
+      if (locked[i]) continue;
+      // gravity: without it, repulsion slowly inflates the arrangement and
+      // clusters drift out of the view over long sweeps
+      vx[i] -= px[i] * GRAVITY;
+      vy[i] -= py[i] * GRAVITY;
     }
     for (const [a, b] of eix) {
       const dx = px[b] - px[a], dy = py[b] - py[a];
@@ -683,6 +693,7 @@ function rebuildGraph(elements) {
     cy.on("tap", (evt) => {
       if (evt.target === cy) clearHighlight();
     });
+    wireClusterDrag();
   }
   // Query results own the canvas wholesale (arbitrary element sets, another
   // id space) — they always take the full path, and so does the view render
@@ -852,6 +863,52 @@ function rebuildGraph(elements) {
       : "<div><b>No dependencies</b>Nothing was declared at this point in time.</div>";
   }
   needsFullLayout = false;
+}
+
+// ---------------------------------------------- dragging a cluster by hub
+
+/// Dragging a developer/repo-area hub: the first ~100px moves the hub
+/// alone; keep dragging and its attached dependencies join, moving as one
+/// combined unit for the rest of the drag. Release to drop the cluster.
+const CLUSTER_DRAG_JOIN = 100;
+let clusterDrag = null; // {node, start, deps, offsets, joined} while a hub drag is live
+
+function wireClusterDrag() {
+  const hubSel = "node[type = 'dev'], node[type = 'area']";
+  cy.on("grab", hubSel, (evt) => {
+    const node = evt.target;
+    const p = node.position();
+    clusterDrag = {
+      node,
+      start: { x: p.x, y: p.y },
+      deps: node.outgoers("node").toArray(),
+      offsets: null,
+      joined: false,
+    };
+  });
+  cy.on("drag", hubSel, (evt) => {
+    const st = clusterDrag;
+    if (!st || evt.target !== st.node) return;
+    const p = st.node.position();
+    if (!st.joined) {
+      const moved = Math.hypot(p.x - st.start.x, p.y - st.start.y);
+      if (moved < CLUSTER_DRAG_JOIN) return; // the hub moves alone for now
+      // the user keeps pulling: the dependencies join as one unit, each
+      // keeping its offset from the hub at the moment of joining
+      st.joined = true;
+      st.offsets = st.deps.map((d) => {
+        const dp = d.position();
+        return { ele: d, dx: dp.x - p.x, dy: dp.y - p.y };
+      });
+    }
+    for (const o of st.offsets) {
+      if (!o.ele.inside() || o.ele.grabbed() || o.ele.locked()) continue;
+      o.ele.position({ x: p.x + o.dx, y: p.y + o.dy });
+    }
+  });
+  cy.on("free", hubSel, () => {
+    clusterDrag = null;
+  });
 }
 
 function highlight(node) {
