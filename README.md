@@ -46,7 +46,11 @@ Or build from source (see [Building](#building)).
 Running with no options scans and opens the browser at `http://localhost:8334` on its own.
 Open the URL: an interactive dependency graph with a **time-travel slider** — drag it
 back to any commit and watch the SBOM shrink to what the repo depended on that day.
-The sweep controls (⏮ ▶ ⏸) play the whole history day by day as an animation.
+Time travel glides: packages that exist on both days keep their exact spot
+(nothing moves on days where nothing changed), and on changed days the
+remaining nodes animate smoothly to their new places. Nodes that first
+appear settle in beside their dependents. The sweep controls (⏮ ▶ ⏸) play
+the whole history day by day as an animation.
 Click any package to see **who added it, when, its full version timeline, and every
 file that uses it**; click a developer or repo-area hub to list the dependencies
 attributed to it. The raw-Cypher box at the bottom shows the temporal query behind

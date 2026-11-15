@@ -41,6 +41,8 @@ let calMonth = null;         // month the calendar popover is showing
 let playing = false;         // autoplay sweep running?
 let playTimer = null;        // pending next-step timeout of the sweep
 let detailedPackages = 0;    // packages carrying deps.dev data (from /api/meta)
+let needsFullLayout = true;  // next render rebuilds from scratch (first render, glitch recovery, view flips)
+let lastRenderWasQuery = false; // previous canvas content was a raw-Cypher result
 const DIRECT_ONLY_THRESHOLD = 20;
 
 const $ = (id) => document.getElementById(id);
@@ -272,7 +274,11 @@ const CY_STYLE = [
 
 /// Hub-and-spoke results (one developer → 200 packages) knot up under a
 /// force layout; rings by degree read far better.
-function layoutOptions(n) {
+///
+/// `seeded` (incremental updates): start from the nodes' current positions
+/// instead of randomizing — a day-two graph resembles day one, so persisting
+/// nodes barely move and the layout's motion plays as a smooth animation.
+function layoutOptions(n, seeded) {
   if (cy && n > 40) {
     const maxDeg = cy.nodes().max((x) => x.degree()).value;
     if (maxDeg > n * 0.3) {
@@ -289,7 +295,8 @@ function layoutOptions(n) {
       });
       return {
         name: "concentric",
-        animate: false,
+        animate: !!seeded,
+        animationDuration: 300,
         concentric: (x) => (ring.has(x.id()) ? -ring.get(x.id()) : 1),
         levelWidth: () => 1,
         minNodeSpacing: 22,
@@ -299,8 +306,11 @@ function layoutOptions(n) {
   }
   return {
     name: "cose",
-    animate: false,
-    randomize: true,
+    // Seeded ("end"): the layout computes against current positions, then
+    // nodes interpolate to their new spots over 300ms — a glide, not a hop.
+    animate: seeded ? "end" : false,
+    animationDuration: 300,
+    randomize: !seeded,
     nodeRepulsion: () => (n > 150 ? 9000 : 6000),
     idealEdgeLength: () => (n > 150 ? 50 : 70),
     nodeOverlap: 8,
@@ -313,7 +323,10 @@ function layoutOptions(n) {
 /// that star-of-stars into a hairball. Hubs go evenly on a big ring (like
 /// the devs view), each hub's packages fan on a circle around it sized so
 /// neighbouring fans never touch. Returns false when there are no hubs.
-function applyAreasLayout() {
+/// With `animate`, persisting nodes glide to their new spot (a hub gaining
+/// a package re-spreads its fan as a smooth opening) and brand-new nodes
+/// are placed instantly.
+function applyAreasLayout(animate) {
   const hubs = cy.nodes("[type = 'area']");
   if (hubs.length === 0) return false;
   const tau = Math.PI * 2;
@@ -327,20 +340,24 @@ function applyAreasLayout() {
   });
   // Ring circumference sized so adjacent fans stay pr_i + pr_j + gap apart.
   const R = Math.max(170, (fans.reduce((s, f) => s + 2 * f.pr, 0) / tau) * 1.35);
+  const place = (node, x, y) => {
+    if (animate && node.animate) {
+      node.animate({ position: { x, y } }, { duration: 300, easing: "ease-in-out" });
+    } else {
+      node.position({ x, y });
+    }
+  };
   let angle = -Math.PI / 2;
   fans.forEach((f, i) => {
     const mid = angle + f.pr / R; // centre of this hub's angular slice
     angle += (2 * f.pr) / R;
     const hx = R * Math.cos(mid);
     const hy = R * Math.sin(mid);
-    f.hub.position({ x: hx, y: hy });
+    place(f.hub, hx, hy);
     const spin = i * 2.4; // stagger fans so neighbours don't line up
     f.kids.forEach((p, j) => {
       const pa = mid + spin + (j / Math.max(f.kids.length, 1)) * tau;
-      p.position({
-        x: hx + f.pr * Math.cos(pa),
-        y: hy + f.pr * Math.sin(pa),
-      });
+      place(p, hx + f.pr * Math.cos(pa), hy + f.pr * Math.sin(pa));
     });
   });
   return true;
@@ -370,8 +387,82 @@ function buildGraph(elements) {
       // already gone
     }
     cy = null;
+    needsFullLayout = true;
     rebuildGraph(elements);
   }
+}
+
+// ------------------------------------------------------------- diffing
+
+/// Edge identity across renders: endpoints plus what kind of edge it is
+/// (a package↔package DEPENDS_ON edge and a hub attribution edge are
+/// different edges even between the same pair). Accepts both a plain
+/// `{data: …}` element and a live cytoscape edge (where `data` is a method).
+function edgeKeyOf(e) {
+  const d = typeof e.data === "function" ? e.data() : e.data;
+  return `${d.source}\u0000${d.target}\u0000${d.source_kind}`;
+}
+
+/// Pure diff of two cytoscape element sets — the basis of smooth time
+/// travel. Persisting nodes keep their identity (and therefore position);
+/// only genuinely new/gone elements change the picture. Pure JSON-in/out
+/// so the vm-based UI smoke can assert on it without a canvas.
+function diffElements(oldEls, newEls) {
+  const oldNodes = new Map(oldEls.nodes.map((n) => [n.data.id, n]));
+  const newNodes = new Map(newEls.nodes.map((n) => [n.data.id, n]));
+  const keptNodeIds = [];
+  const addedNodes = [];
+  const removedNodeIds = [];
+  for (const [id, n] of newNodes) {
+    if (oldNodes.has(id)) keptNodeIds.push(id);
+    else addedNodes.push(n);
+  }
+  for (const id of oldNodes.keys()) {
+    if (!newNodes.has(id)) removedNodeIds.push(id);
+  }
+  const oldEdges = new Map(oldEls.edges.map((e) => [edgeKeyOf(e), e]));
+  const newEdges = new Map(newEls.edges.map((e) => [edgeKeyOf(e), e]));
+  const addedEdges = [];
+  const removedEdgeKeys = [];
+  for (const [k, e] of newEdges) {
+    if (!oldEdges.has(k)) addedEdges.push(e);
+  }
+  for (const k of oldEdges.keys()) {
+    if (!newEdges.has(k)) removedEdgeKeys.push(k);
+  }
+  const unchanged =
+    addedNodes.length === 0 &&
+    removedNodeIds.length === 0 &&
+    addedEdges.length === 0 &&
+    removedEdgeKeys.length === 0;
+  return { keptNodeIds, addedNodes, removedNodeIds, addedEdges, removedEdgeKeys, unchanged };
+}
+
+/// Where a brand-new node materializes: next to a persisted neighbour it
+/// connects to (so the seed layout starts local, not at a random corner),
+/// else near a same-kind hub, else centre.
+function spawnPosition(id, elements) {
+  for (const e of elements.edges) {
+    const other =
+      e.data.source === id ? e.data.target : e.data.target === id ? e.data.source : null;
+    if (other) {
+      const n = cy.getElementById(other);
+      if (n.nonempty()) {
+        const p = n.position();
+        return { x: p.x + (Math.random() - 0.5) * 40, y: p.y + (Math.random() - 0.5) * 40 };
+      }
+    }
+  }
+  const colon = id.indexOf(":");
+  if (colon > 0) {
+    const prefix = id.slice(0, colon + 1);
+    const hub = cy.nodes().filter((n) => String(n.id()).startsWith(prefix)).first();
+    if (hub.nonempty()) {
+      const p = hub.position();
+      return { x: p.x + 50, y: p.y + 50 };
+    }
+  }
+  return { x: 0, y: 0 };
 }
 
 function rebuildGraph(elements) {
@@ -383,25 +474,73 @@ function rebuildGraph(elements) {
       minZoom: 0.05,
       maxZoom: 4,
     });
+    needsFullLayout = true;
     cy.on("tap", "node", (evt) => onNodeTap(evt.target));
     cy.on("tap", "edge", (evt) => showEdge(evt.target));
     cy.on("tap", (evt) => {
       if (evt.target === cy) clearHighlight();
     });
   }
-  cy.batch(() => {
-    cy.elements().remove();
-    cy.add(elements);
-  });
+  // Query results own the canvas wholesale (arbitrary element sets, another
+  // id space) — they always take the full path, and so does the view render
+  // that follows a dismissed query.
+  const isQuery = !!queryElements;
+  const full = needsFullLayout || isQuery || lastRenderWasQuery;
+  let changed = true;
+
   // Dense canvases only label nodes once you zoom in — but the dependencies
   // view is hand-placed and spread out, so it always labels.
-  const handPlaced = !queryElements && view === "areas";
+  const handPlaced = !isQuery && view === "areas";
   cy.nodes().toggleClass("dense", !handPlaced && elements.nodes.length > 80);
-  if (elements.nodes.length === 0) return; // nothing to lay out or fit
-  if (!(handPlaced && applyAreasLayout())) {
-    cy.layout(layoutOptions(elements.nodes.length)).run();
+
+  if (full) {
+    cy.batch(() => {
+      cy.elements().remove();
+      cy.add(elements);
+    });
+  } else {
+    const diff = diffElements(
+      {
+        nodes: cy.nodes().map((n) => ({ data: Object.assign({}, n.data()) })),
+        edges: cy.edges().map((e) => ({ data: Object.assign({}, e.data()) })),
+      },
+      elements
+    );
+    changed = !diff.unchanged;
+    const nextData = new Map(elements.nodes.map((n) => [n.data.id, n.data]));
+    cy.batch(() => {
+      if (changed) {
+        const rmKeys = new Set(diff.removedEdgeKeys);
+        cy.edges()
+          .filter((e) => rmKeys.has(edgeKeyOf(e)))
+          .remove();
+        for (const id of diff.removedNodeIds) cy.getElementById(id).remove();
+        for (const n of diff.addedNodes) {
+          cy.add({ data: Object.assign({}, n.data), position: spawnPosition(n.data.id, elements) });
+        }
+        for (const e of diff.addedEdges) {
+          cy.add({ data: Object.assign({}, e.data) });
+        }
+      }
+      // Data refresh always runs — a node can change its label, scope or
+      // vulns count with its identity (and position) untouched.
+      for (const id of diff.keptNodeIds) {
+        const n = cy.getElementById(id);
+        if (n.nonempty()) n.data(nextData.get(id));
+      }
+    });
   }
-  fitReasonably();
+  lastRenderWasQuery = isQuery;
+
+  if (elements.nodes.length === 0) return; // nothing to lay out or fit
+  // An unchanged element set means nothing moved: no layout, no fit — the
+  // graph is perfectly stable between days that differ in nothing.
+  if (changed) {
+    if (!(handPlaced && applyAreasLayout(!full))) {
+      cy.layout(layoutOptions(elements.nodes.length, !full)).run();
+    }
+    fitReasonably();
+  }
   renderLegend();
   const empty = $("empty-state");
   empty.hidden = elements.nodes.length > 0;
@@ -410,6 +549,7 @@ function rebuildGraph(elements) {
       ? "<div><b>No graph values</b>The query returned rows but no nodes.</div>"
       : "<div><b>No dependencies</b>Nothing was declared at this point in time.</div>";
   }
+  needsFullLayout = false;
 }
 
 function highlight(node) {

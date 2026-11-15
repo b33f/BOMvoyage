@@ -169,4 +169,47 @@ const checkVersion = (el, label) => {
 checkVersion(el, "detailed");
 checkVersion(plain.el, "plain");
 
-console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes; version chip renders");
+// --- diffElements: the basis of smooth time travel ---------------------
+const els = (nodes, edges) => ({ nodes, edges });
+const nd = (id) => ({ data: { id, label: id } });
+const eg = (s, t, k = "lockfile") => ({ data: { source: s, target: t, source_kind: k } });
+
+// identical sets → unchanged
+{
+  const d = sandbox.diffElements(els([nd("a"), nd("b")], [eg("a", "b")]), els([nd("a"), nd("b")], [eg("a", "b")]));
+  if (!d.unchanged) throw new Error("identical element sets must be unchanged");
+  if (d.keptNodeIds.length !== 2) throw new Error("both nodes kept");
+}
+// node + edge added
+{
+  const d = sandbox.diffElements(els([nd("a")], []), els([nd("a"), nd("b")], [eg("a", "b")]));
+  if (d.unchanged || d.addedNodes.length !== 1 || d.addedNodes[0].data.id !== "b")
+    throw new Error("new node must be an addition");
+  if (d.addedEdges.length !== 1) throw new Error("new edge must be an addition");
+  if (d.keptNodeIds.length !== 1 || d.keptNodeIds[0] !== "a") throw new Error("a must persist");
+}
+// node removed (and its edge with it)
+{
+  const d = sandbox.diffElements(els([nd("a"), nd("b")], [eg("a", "b")]), els([nd("a")], []));
+  if (d.removedNodeIds.length !== 1 || d.removedNodeIds[0] !== "b")
+    throw new Error("b must be removed");
+  if (d.removedEdgeKeys.length !== 1) throw new Error("b's edge must be removed");
+}
+// same endpoints, different edge kind = a different edge (not conflated)
+{
+  const d = sandbox.diffElements(els([nd("a"), nd("b")], [eg("a", "b", "lockfile")]), els([nd("a"), nd("b")], [eg("a", "b", "attribution")]));
+  if (d.unchanged || d.addedEdges.length !== 1 || d.removedEdgeKeys.length !== 1)
+    throw new Error("edge identity must include source_kind");
+}
+
+// --- layoutOptions: seeded vs first-render ------------------------------
+{
+  const seeded = sandbox.layoutOptions(10, true);
+  if (seeded.randomize !== false || seeded.animate === false)
+    throw new Error(`seeded layout must not randomize and must animate: ${JSON.stringify(seeded)}`);
+  const fresh = sandbox.layoutOptions(10);
+  if (fresh.randomize !== true || fresh.animate !== false)
+    throw new Error(`first-render layout must randomize, unanimated: ${JSON.stringify(fresh)}`);
+}
+
+console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes; version chip renders; diff + seeded-layout verified");
