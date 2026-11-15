@@ -48,10 +48,11 @@ Open the URL: an interactive dependency graph with a **time-travel slider** — 
 back to any commit and watch the SBOM shrink to what the repo depended on that day.
 Time travel glides: packages that exist on both days keep their exact spot
 (nothing moves on days where nothing changed), and on changed days the
-remaining nodes animate smoothly to their new places. Nodes that first
-appear settle in beside their dependents. The sweep controls (⏮ ▶ ⏸) play
-the whole history day by day as an animation, and **2×** doubles the
-playback speed; pausing freezes the frame instantly.
+remaining nodes animate smoothly to their new places. A dependency that
+first appears arrives **purple with a pink outline** and fades to the
+standard green as it settles in beside its dependents. The sweep controls
+(⏮ ▶ ⏸) play the whole history day by day as an animation, and **2×**
+doubles the playback speed; pausing freezes the frame instantly.
 Click any package to see **who added it, when, its full version timeline, and every
 file that uses it**; click a developer or repo-area hub to list the dependencies
 attributed to it. The raw-Cypher box at the bottom shows the temporal query behind
