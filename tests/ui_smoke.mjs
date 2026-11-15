@@ -549,4 +549,23 @@ const eg = (s, t, k = "lockfile") => ({ data: { source: s, target: t, source_kin
     throw new Error(`a rate-limited revisit must serve the cached listing: ${JSON.stringify(opts)}`);
 }
 
+// --- a failed boot surfaces its real error through fetchJson -------------
+{
+  const sb2 = await boot(0); // a fresh world
+  const srcBoot = readFileSync(new URL("../src/ui/wasm-backend.js", import.meta.url), "utf8");
+  sb2.sandbox.window.BOMVOYAGE_RELATE_FACTORY = () => {
+    throw new Error("engine exploded");
+  };
+  sb2.sandbox.fetch = async () => ({ json: async () => ({}) });
+  vm.runInContext(srcBoot, sb2.sandbox, { filename: "wasm-backend-bootfail.js" });
+  let msg = null;
+  try {
+    await sb2.sandbox.window.BOMVOYAGE_STATIC.fetchJson("api/meta");
+  } catch (e) {
+    msg = e.message;
+  }
+  if (!msg || !msg.includes("engine exploded"))
+    throw new Error(`a failed boot must surface the boot error, got: ${msg}`);
+}
+
 console.log("ui smoke: ok — preset exactly once (detailed only); packages green in all modes; version chip renders; diff + seeded-layout verified");

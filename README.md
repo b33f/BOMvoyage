@@ -202,6 +202,9 @@ snapshot the page replays into the **WASM build of RelateDB**
 the whole explorer, including time travel, red-triangle vulnerabilities and
 the Cypher console, runs in the browser with no server and no database
 file. URLs are relative, so it works under a subpath of an existing site.
+Serve the folder over HTTP (`python3 -m http.server`) — opening
+`index.html` directly from disk cannot work (browsers block module
+loading on `file://` URLs); the page says so plainly if it detects that.
 Note: the published artifact exposes the repository's dependency history,
 including committer names and emails. The WASM engine is Chromium-tested
 (upstream); other browsers untested.

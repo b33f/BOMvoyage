@@ -16,6 +16,7 @@ window.BOMVOYAGE_STATIC = (function () {
   let db = null; // RelateDb (in-memory, read-only)
   let readyResolve = null;
   const ready = new Promise((r) => (readyResolve = r));
+  let bootError = null;
 
   // ------------------------------------------------------------- helpers
 
@@ -24,6 +25,12 @@ window.BOMVOYAGE_STATIC = (function () {
   }
 
   async function execute(query, params) {
+    if (!db) {
+      throw new Error(
+        bootError ||
+          "the graph engine is not loaded — reload the page (and serve it over HTTP: opening index.html from a file cannot work)"
+      );
+    }
     const raw = db.execute(query, params ? JSON.stringify(params) : null);
     const envelope = JSON.parse(raw);
     if (envelope.error) throw new Error(envelope.error);
@@ -205,6 +212,9 @@ window.BOMVOYAGE_STATIC = (function () {
   // --------------------------------------------------------- dispatch
 
   async function handle(url, opts) {
+    // A failed boot is the root problem — surface it before anything else.
+    if (bootError && !db) return error(bootError);
+    if (!Q) return error("queries not loaded — queries.js is missing from this deployment");
     const path = url.split("?")[0];
     const qs = url.includes("?") ? url.split("?")[1] : "";
     const qp = (name) => {
@@ -333,6 +343,13 @@ window.BOMVOYAGE_STATIC = (function () {
   async function boot() {
     try {
       const meta = document.getElementById("meta");
+      if (window.location && window.location.protocol === "file:") {
+        // file:// pages cannot load ES modules or fetch() — the engine can
+        // never start. Say so plainly instead of a cryptic null error.
+        throw new Error(
+          "this page was opened from a file — browsers block module loading on file:// URLs. Serve the folder over HTTP instead: run 'python3 -m http.server' in the site directory and open http://localhost:8000/, or deploy it (e.g. npx wrangler pages deploy .)"
+        );
+      }
       if (meta) meta.textContent = "loading the graph engine (WASM)…";
       if (window.BOMVOYAGE_RELATE_FACTORY) {
         // Injection seam for tests: a fake engine object with execute().
@@ -358,9 +375,10 @@ window.BOMVOYAGE_STATIC = (function () {
       readyResolve();
     } catch (e) {
       console.error("BOMvoyage static boot failed:", e);
+      bootError = e.message;
       const meta = document.getElementById("meta");
       if (meta) meta.textContent = `failed to load: ${e.message}`;
-      readyResolve(); // unblock fetchJson; each call surfaces its own error
+      readyResolve(); // unblock fetchJson; each call surfaces the real error
       throw e;
     }
   }
@@ -372,7 +390,10 @@ window.BOMVOYAGE_STATIC = (function () {
     return result;
   }
 
-  boot();
+  // Boot errors are surfaced three ways above (console, meta text,
+  // bootError); the rethrown promise needs a handler so the page's process
+  // doesn't die of an unhandled rejection after a handled failure.
+  boot().catch(() => {});
 
   return { fetchJson, ready, replayStages };
 

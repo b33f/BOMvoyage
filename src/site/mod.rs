@@ -128,7 +128,8 @@ pub fn site_command(
         );
     }
     eprintln!(
-        "deploy to Cloudflare Pages:\n  npx wrangler pages deploy {}\nor upload the directory in the Pages dashboard (framework preset: None). URLs are relative — any static host works, under a subpath too.",
+        "deploy to Cloudflare Pages:\n  npx wrangler pages deploy {}\nor upload the directory in the Pages dashboard (framework preset: None). URLs are relative — any static host works, under a subpath too.\nLocal preview: serve the folder over HTTP ('python3 -m http.server' in {} then open http://localhost:8000/) — opening index.html directly from disk cannot work (browsers block module loading on file:// URLs).",
+        out.display(),
         out.display()
     );
     Ok(())
