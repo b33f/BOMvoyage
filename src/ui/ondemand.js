@@ -298,6 +298,20 @@ window.BOMVOYAGE_ONDEMAND = (function () {
   /// most popular repos (stars) as dropdown suggestions. Free typing is
   /// never restricted — the datalist only suggests. Called with the spec
   /// of whichever repo is currently loaded.
+  /// The account's most-starred repos. `/orgs/{o}/repos` only answers for
+  /// real organizations — user accounts 404 there, so fall back to
+  /// `/users/{a}/repos` (which answers for both).
+  async function orgTopRepos(account) {
+    const q = "?sort=stars&per_page=10&direction=desc";
+    let res = await fetch(`https://api.github.com/orgs/${encodeURIComponent(account)}/repos${q}`);
+    if (res.status === 404) {
+      res = await fetch(`https://api.github.com/users/${encodeURIComponent(account)}/repos${q}`);
+    }
+    if (!res.ok) return null;
+    const repos = await res.json();
+    return Array.isArray(repos) ? repos : null;
+  }
+
   async function noteSpec(spec) {
     if (!spec) return;
     const input = document.getElementById("repo-input");
@@ -306,11 +320,9 @@ window.BOMVOYAGE_ONDEMAND = (function () {
     if (org === currentOrg) return;
     currentOrg = org;
     try {
-      const res = await fetch(`https://api.github.com/orgs/${encodeURIComponent(org)}/repos?sort=stars&per_page=10&direction=desc`);
-      if (!res.ok) return;
-      const repos = await res.json();
+      const repos = await orgTopRepos(org);
       const dl = document.getElementById("repo-suggestions");
-      if (dl && Array.isArray(repos)) {
+      if (repos && dl) {
         dl.innerHTML = "";
         for (const r of repos) {
           const opt = document.createElement("option");
