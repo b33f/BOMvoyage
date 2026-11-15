@@ -111,7 +111,7 @@ commit by commit and run the full scan → graph → temporal-query pipeline.
 
 | Test | What it tests |
 |---|---|
-| `finds_own_listening_socket` | The busy-port finder: a bound ephemeral port yields its holder (this process's pid, a non-empty executable path); a released port has no holder |
+| `finds_own_listening_socket` | The busy-port finder: a bound ephemeral port yields its holder (this process's pid, a non-empty executable path); a released port has no holder (skipped where `lsof` is absent — Windows/minimal Linux — matching the finder's graceful None) |
 | `unbound_port_has_no_holder` | An unbound port reports no holder |
 
 (The interactive kill-prompt flow — prompt, kill, port takeover — is
