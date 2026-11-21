@@ -20,7 +20,7 @@ httparse = "1"
 toml = "1"
 quick-xml = "0.42"
 # self-update: GitHub release check + verified in-place binary upgrade
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "3", features = ["json"] }
 sha2 = "0.10"
 tar = "0.4"
 flate2 = "1"
