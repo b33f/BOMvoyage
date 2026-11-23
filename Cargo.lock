@@ -717,12 +717,12 @@ dependencies = [
 
 [[package]]
 name = "fs4"
-version = "0.8.4"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7e180ac76c23b45e767bd7ae9579bc0bb458618c4bc71835926e098e61d15f8"
+checksum = "7e72ed92b67c146290f88e9c89d60ca163ea417a446f61ffd7b72df3e7f1dfd5"
 dependencies = [
- "rustix 0.38.44",
- "windows-sys 0.52.0",
+ "rustix",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1109,12 +1109,6 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "linux-raw-sys"
-version = "0.4.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
-
-[[package]]
-name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
@@ -1467,9 +1461,9 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "relate"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e26ecb3d9575337fbe263dedfc0d56b826ab0079b4fa24960ed56311da2e45f"
+checksum = "19c147e1d107458b577e56492e09ca904cd384f6fe2ace8a179f65ff487fb3fe"
 dependencies = [
  "indexmap",
  "relate-catalog",
@@ -1494,9 +1488,9 @@ dependencies = [
 
 [[package]]
 name = "relate-catalog"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "169d7790208a4433de0e09f3a79ad6974eca4b9ecbea4edf8a2e918ac2c6caf8"
+checksum = "c373eceac61196eead5a2196f74bb46b637e46c5350dbfc89848760bb767f262"
 dependencies = [
  "relate-core",
  "relate-model",
@@ -1505,9 +1499,9 @@ dependencies = [
 
 [[package]]
 name = "relate-core"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19548d8922290ed8f17beaf3eb6c64a9682ccf98ff696e95d70fa87c0fd39299"
+checksum = "c8d3e6803179db54df0aaee84d0f3c8248b8c7b4dea8ccd76cafab830942e7bd"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -1521,9 +1515,9 @@ dependencies = [
 
 [[package]]
 name = "relate-engine-api"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7eae9aa1e6aec85d42b1973d0cedc4a814003345e98206f296abb2dc8203973e"
+checksum = "d5301da714318a06d14872a0998aebad0d740f35bf6a03ffe50443935238ca21"
 dependencies = [
  "relate-catalog",
  "relate-core",
@@ -1538,9 +1532,9 @@ dependencies = [
 
 [[package]]
 name = "relate-error"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0b390518a8c26ffcd44b5a91d565fa441c4fc8e2272c65be0db1503c4a34475"
+checksum = "4c02a815db5f5a7b2b736700a8cd4cab5637ac7752d89e657cc357ea1d6afe2a"
 dependencies = [
  "relate-core",
  "relate-parser",
@@ -1548,9 +1542,9 @@ dependencies = [
 
 [[package]]
 name = "relate-executor"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "206f892e2cffeefe81c176454423e48e6eeed734494c06ab0682764e55fcff8e"
+checksum = "673a5da7103fac0d1860e1db374392bd56e71a982c23f1b1a3a317a4ec9649a0"
 dependencies = [
  "chrono",
  "dashmap",
@@ -1579,9 +1573,9 @@ dependencies = [
 
 [[package]]
 name = "relate-front"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85efa9d3fdb6623e1bc727e33df5a288e08f7bed440e626469d2bd3633a30c45"
+checksum = "7ea40656e7505efaa91f52cc0e922fd9714008e64fba60a6b1ac1b2b19d6a548"
 dependencies = [
  "relate-core",
  "relate-error",
@@ -1594,9 +1588,9 @@ dependencies = [
 
 [[package]]
 name = "relate-ir"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4874bca582f5d4883ecfe2bee812c4d7f7e0090ce38990503301bebfa8e0d904"
+checksum = "415ffd36cf0aa924ed9803a59a6355235e448a92035b067f12489712afe8bd8e"
 dependencies = [
  "relate-core",
  "relate-names",
@@ -1605,9 +1599,9 @@ dependencies = [
 
 [[package]]
 name = "relate-markdown"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38a7d67e936c5815f2989c95afff537ff56e544f5cadd42dd4bc54fb50c3d3ca"
+checksum = "adb87f0888d7163a5c6175801378af4ff56f64d48d9b81d46c7391e22c218977"
 dependencies = [
  "relate-core",
  "saphyr-parser",
@@ -1616,9 +1610,9 @@ dependencies = [
 
 [[package]]
 name = "relate-model"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b582b3f6ea98c6a792d1b11e35240fbbdbea84e5c353aaeedb3391081cb46bff"
+checksum = "54b458831618ea3cb957d8ec832e5286d6c4e5e6882de24577906e623279e8c8"
 dependencies = [
  "chrono",
  "indexmap",
@@ -1628,15 +1622,15 @@ dependencies = [
 
 [[package]]
 name = "relate-names"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3dc2dbb630b7eb3c22680e62669525cfa7fc16c00fcb0d536caba7f3a8cc9a0"
+checksum = "07771fb31bb4f52aa58067eb822680b833c3ad44cf63a42a5760bfa5bb32f9c8"
 
 [[package]]
 name = "relate-ontology"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3758ca98fe7ef7892d11dc1fd8f925264eaf9f789271ac478cf9c8dde43270f3"
+checksum = "6237a68404fd8aa114eb9a7b8e58906a90250ca686adda5beb408711a5d9de05"
 dependencies = [
  "indexmap",
  "relate-core",
@@ -1651,9 +1645,9 @@ dependencies = [
 
 [[package]]
 name = "relate-parser"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e122800aedab68ca95080be84ebf83b0ce9de8ce799c7f5dd518f2f6ff562a51"
+checksum = "fcf69e5eedc18fa80f92f3ebd90ceba04b5c6f3ed5c704e1cc0632d6d311d58e"
 dependencies = [
  "relate-model",
  "relate-names",
@@ -1661,9 +1655,9 @@ dependencies = [
 
 [[package]]
 name = "relate-planner"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6c73dbe5552577dde124b183496700a430c2f5641a503de3e38c0e5f3f11b56"
+checksum = "d88a42ae564d26640a5451c56bf93e4b78fac99e3b5f8ddddefb7b7ca08c1c84"
 dependencies = [
  "relate-catalog",
  "relate-core",
@@ -1676,15 +1670,15 @@ dependencies = [
 
 [[package]]
 name = "relate-splitter"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca00f2d8b8d2ca886f229952bbdbc7c0f7c5428ad07bcb71aaa635f6e6f1ba1e"
+checksum = "6d7eea3504936b1d5873b2ac224723b546594beecc87eef7006d9b5ba209b40c"
 
 [[package]]
 name = "relate-storage"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b6670a6b00b446dff31d5a158d4af76d0ad6dbaf71a280a553ae69c2f53693f"
+checksum = "c6caf6f3135b6599f2f1b319e4f8a2743abf437cb9018c0e7658080b2c6b5b91"
 dependencies = [
  "arrow",
  "bytes",
@@ -1707,9 +1701,9 @@ dependencies = [
 
 [[package]]
 name = "relate-write-local"
-version = "1.1.0"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fea4fe5cb290edac47d4ba1ad44249a76e8a336110184d7655821753c09f8ae4"
+checksum = "148af3394bcf1b1fd3e06e26068120fe4d408f6f57c961c2f2a9f9a0b116d0db"
 dependencies = [
  "relate-core",
  "relate-engine-api",
@@ -1758,19 +1752,6 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "0.38.44"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdb5bc1ae2baa591800df16c9ca78619bf65c0488b41b96ccec5d11220d8c154"
-dependencies = [
- "bitflags",
- "errno",
- "libc",
- "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "rustix"
 version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
@@ -1778,7 +1759,7 @@ dependencies = [
  "bitflags",
  "errno",
  "libc",
- "linux-raw-sys 0.12.1",
+ "linux-raw-sys",
  "windows-sys 0.61.2",
 ]
 
@@ -2039,7 +2020,7 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.3",
  "once_cell",
- "rustix 1.1.6",
+ "rustix",
  "windows-sys 0.61.2",
 ]
 
@@ -2421,15 +2402,6 @@ dependencies = [
 
 [[package]]
 name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
-dependencies = [
- "windows-targets",
-]
-
-[[package]]
-name = "windows-sys"
 version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
@@ -2526,7 +2498,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "963d6fab92d5504b971dc8bd90ca743c2575e590bc8071ea5bc571598667ae08"
 dependencies = [
  "libc",
- "rustix 1.1.6",
+ "rustix",
 ]
 
 [[package]]
