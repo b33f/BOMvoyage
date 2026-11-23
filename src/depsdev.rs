@@ -224,27 +224,32 @@ fn get_json(agent: &ureq::Agent, url: &str) -> Result<Option<serde_json::Value>,
             std::thread::sleep(Duration::from_secs(backoff));
             backoff *= 2;
         }
-        match agent.get(url).set("User-Agent", USER_AGENT).call() {
-            Ok(resp) => {
-                let body: serde_json::Value = resp
-                    .into_json()
+        let response = match agent.get(url).header("User-Agent", USER_AGENT).call() {
+            Ok(resp) => resp,
+            Err(e) => return Err(format!("request failed: {e}")),
+        };
+        let code = response.status().as_u16();
+        match code {
+            200 => {
+                let body: serde_json::Value = response
+                    .into_body()
+                    .read_json()
                     .map_err(|e| format!("unreadable response: {e}"))?;
                 return Ok(Some(body));
             }
-            Err(ureq::Error::Status(code, resp)) => match code {
-                404 => return Ok(None),
-                429 | 502 | 503 | 504 => {
-                    if let Some(ra) = resp
-                        .header("Retry-After")
-                        .and_then(|s| s.trim().parse::<u64>().ok())
-                    {
-                        backoff = backoff.max(ra.min(10));
-                    }
-                    continue;
+            404 => return Ok(None),
+            429 | 502 | 503 | 504 => {
+                if let Some(ra) = response
+                    .headers()
+                    .get("Retry-After")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                {
+                    backoff = backoff.max(ra.min(10));
                 }
-                _ => return Err(format!("HTTP {code}")),
-            },
-            Err(e) => return Err(format!("request failed: {e}")),
+                continue;
+            }
+            _ => return Err(format!("HTTP {code}")),
         }
     }
     Err(format!(
@@ -377,9 +382,14 @@ fn fetch_version_info(
 fn fetch_versions(targets: &[DetailedTarget], refresh: bool) -> Vec<Result<Fetched, String>> {
     use std::io::IsTerminal as _;
     use std::io::Write as _;
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-        .build();
+    let agent = ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(REQUEST_TIMEOUT_SECS)))
+            // 4xx/5xx arrive as Ok responses; get_json() matches on the
+            // status itself, which keeps the 429 Retry-After header reachable.
+            .http_status_as_error(false)
+            .build(),
+    );
     let dir = cache_dir("depsdev");
     let next = AtomicUsize::new(0);
     let results: Mutex<Vec<(usize, Result<Fetched, String>)>> =
@@ -664,9 +674,14 @@ type FetchResult = Result<Option<serde_json::Value>, String>;
 type OsvDetails = HashMap<String, (Option<String>, Option<String>)>;
 
 fn fetch_osv_details(ids: &[String], refresh: bool) -> OsvDetails {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-        .build();
+    let agent = ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(REQUEST_TIMEOUT_SECS)))
+            // 4xx/5xx arrive as Ok responses; get_json() matches on the
+            // status itself, which keeps the 429 Retry-After header reachable.
+            .http_status_as_error(false)
+            .build(),
+    );
     let dir = cache_dir("osv");
     let next = AtomicUsize::new(0);
     let results: Mutex<Vec<(String, FetchResult)>> = Mutex::new(Vec::with_capacity(ids.len()));

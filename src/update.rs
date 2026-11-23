@@ -209,12 +209,11 @@ fn record(info: Option<UpdateInfo>) {
 
 /// Fetch the latest published release tag from GitHub (one HTTPS call).
 fn fetch_latest() -> ToolResult<UpdateInfo> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(10))
-        .build();
+    let agent = agent_with_timeout(Duration::from_secs(10));
     let response = get_allowlisted(&agent, &format!("{REPO_API}/releases/latest"))?;
     let body: serde_json::Value = response
-        .into_json()
+        .into_body()
+        .read_json()
         .map_err(|e| ToolError::Io(std::io::Error::other(format!("release check: {e}"))))?;
     let tag = body
         .get("tag_name")
@@ -310,10 +309,24 @@ fn allowlisted(url: &str) -> bool {
     ALLOWED_HOSTS.contains(&host)
 }
 
+/// One shared agent config: the given timeout, manual redirect following
+/// (every hop re-passes the allowlist) and statuses delivered as responses
+/// rather than errors (404 attestation lookup reads the response itself).
+fn agent_with_timeout(timeout: Duration) -> ureq::Agent {
+    ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_global(Some(timeout))
+            .max_redirects(0)
+            .max_redirects_will_error(false)
+            .http_status_as_error(false)
+            .build(),
+    )
+}
+
 /// GET with redirects followed manually so every hop re-passes the
 /// GitHub-only allowlist (a release asset URL may legitimately redirect to
 /// the CDN; it may never leave *.github.com / githubusercontent.com).
-fn get_allowlisted(agent: &ureq::Agent, url: &str) -> ToolResult<ureq::Response> {
+fn get_allowlisted(agent: &ureq::Agent, url: &str) -> ToolResult<ureq::http::Response<ureq::Body>> {
     let mut current = url.to_string();
     for _ in 0..=MAX_REDIRECTS {
         if !allowlisted(&current) {
@@ -323,14 +336,18 @@ fn get_allowlisted(agent: &ureq::Agent, url: &str) -> ToolResult<ureq::Response>
         }
         let response = agent
             .get(&current)
-            .set("User-Agent", USER_AGENT)
+            .header("User-Agent", USER_AGENT)
             .call()
             .map_err(|e| ToolError::Other(format!("download failed ({current}): {e}")))?;
-        let status = response.status();
+        let status = response.status().as_u16();
         if (300..400).contains(&status) {
-            let location = response.header("Location").ok_or_else(|| {
-                ToolError::Other(format!("redirect from {current} had no Location"))
-            })?;
+            let location = response
+                .headers()
+                .get("Location")
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| {
+                    ToolError::Other(format!("redirect from {current} had no Location"))
+                })?;
             current = resolve_redirect(&current, location);
             continue;
         }
@@ -369,20 +386,21 @@ fn resolve_redirect(base: &str, location: &str) -> String {
 fn require_attestation(agent: &ureq::Agent, archive_sha256_hex: &str) -> ToolResult<()> {
     let url = format!("{REPO_API}/attestations/sha256:{archive_sha256_hex}");
     let response = get_allowlisted(agent, &url)?;
-    if response.status() == 404 {
+    if response.status().as_u16() == 404 {
         return Err(ToolError::Other(format!(
             "no build-provenance attestation for this artifact (sha256:{archive_sha256_hex}) — refusing to install.\n\
              The artifact was not produced by this repository's release workflow."
         )));
     }
-    if response.status() != 200 {
+    if response.status().as_u16() != 200 {
         return Err(ToolError::Other(format!(
             "attestation lookup failed with HTTP {} — refusing to install",
             response.status()
         )));
     }
     let body: serde_json::Value = response
-        .into_json()
+        .into_body()
+        .read_json()
         .map_err(|e| ToolError::Other(format!("attestation lookup unreadable: {e}")))?;
     // The API answers `{"attestations": [...]}`; older shapes carried a
     // `total_count`. Accept either, require at least one bundle.
@@ -410,14 +428,13 @@ fn require_attestation(agent: &ureq::Agent, archive_sha256_hex: &str) -> ToolRes
 /// runs on the next launch.
 pub fn apply_command() -> ToolResult<()> {
     eprintln!("checking for the latest release …");
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(600))
-        .build();
+    let agent = agent_with_timeout(Duration::from_secs(600));
 
     // Latest release metadata: find this platform's assets.
     let response = get_allowlisted(&agent, &format!("{REPO_API}/releases/latest"))?;
     let release: serde_json::Value = response
-        .into_json()
+        .into_body()
+        .read_json()
         .map_err(|e| ToolError::Other(format!("release lookup failed: {e}")))?;
     let tag = release
         .get("tag_name")
@@ -519,7 +536,10 @@ fn target_triple() -> &'static str {
 
 fn download_capped(agent: &ureq::Agent, url: &str) -> ToolResult<Vec<u8>> {
     let response = get_allowlisted(agent, url)?;
-    let mut reader = response.into_reader().take(MAX_DOWNLOAD_BYTES + 1);
+    let mut reader = response
+        .into_body()
+        .into_reader()
+        .take(MAX_DOWNLOAD_BYTES + 1);
     let mut bytes = Vec::new();
     reader
         .read_to_end(&mut bytes)
