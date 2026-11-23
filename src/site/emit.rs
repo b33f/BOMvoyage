@@ -83,13 +83,16 @@ fn index_html() -> ToolResult<String> {
 fn bundle_wasm(out: &Path) -> ToolResult<()> {
     use flate2::read::GzDecoder;
 
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(60))
-        .build();
+    let agent = ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(60)))
+            .http_status_as_error(false)
+            .build(),
+    );
     let url = wasm_tarball_url();
     let response = agent
         .get(&url)
-        .set(
+        .header(
             "User-Agent",
             concat!("bomvoyage/", env!("CARGO_PKG_VERSION")),
         )
@@ -97,6 +100,7 @@ fn bundle_wasm(out: &Path) -> ToolResult<()> {
         .map_err(|e| ToolError::Other(format!("relate-wasm download failed ({url}): {e}")))?;
     let mut tarball = Vec::new();
     response
+        .into_body()
         .into_reader()
         .read_to_end(&mut tarball)
         .map_err(|e| ToolError::Other(format!("relate-wasm download truncated: {e}")))?;
