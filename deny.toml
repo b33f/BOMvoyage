@@ -20,6 +20,9 @@ allow = [
   "Unlicense",
   "CC0-1.0",
   "CDLA-Permissive-2.0",
+  # Boost Software License 1.0 — standard permissive. Pulled in by
+  # xxhash-rust < relate-executor < relate 1.1.0.
+  "BSL-1.0",
 ]
 confidence-threshold = 0.93
 
@@ -28,16 +31,14 @@ version = 2
 yanked = "deny"
 # Documented exceptions only — each with the reason and the fix path:
 ignore = [
-    # `paste` (dtolnay) is archived/unmaintained; it is a build-time macro crate
-    # reached only through parquet 54.x <- relate-storage 1.0.1 <- relate 1.0.1.
-    # No vulnerability — remove when a new `relate` release drops it.
-    "RUSTSEC-2024-0436",
-    # Apache Thrift unbounded allocation in `read_bytes` (Dependabot alert #1),
-    # fixed in thrift 0.23.0 but pinned to ^0.17 by parquet 54.x <-
-    # relate-storage 1.0.1 <- relate 1.0.1. Exposure is local-only: thrift here
-    # parses .rl snapshot files this tool itself wrote. Fix when `relate`
-    # publishes a release on a newer parquet chain.
-    "RUSTSEC-2026-0435",
+    # chrono and chrono-tz are unmaintained (chronotope winding down, see
+    # chronotope/chrono#1768). Transitive only: arrow-arith <- relate-storage
+    # <- relate. No vulnerability; remove when `relate` moves off the
+    # chrono/arrow chain. (Locally these warn "not encountered" on
+    # cargo-deny >= 0.22, which scopes unmaintained to workspace deps —
+    # CI's pinned action runs 0.20.2, which checks the whole graph.)
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0555",
 ]
 
 [sources]
