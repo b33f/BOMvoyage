@@ -602,7 +602,9 @@ fn cmd_query(db: &Path, cypher: &str) -> ToolResult<()> {
     let graph = open_read_only_or_ephemeral(db)?;
     let mut conn = graph.db.connect()?;
     let result = conn.query(cypher)?;
-    let wire = relate::query_result_to_wire(&result);
+    // relate 1.2.0 wraps the wire value in its own Result; propagate the
+    // error instead of serializing it.
+    let wire = relate::query_result_to_wire(&result)?;
     println!("{}", serde_json::to_string_pretty(&wire)?);
     Ok(())
 }
